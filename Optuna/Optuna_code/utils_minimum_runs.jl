@@ -15,7 +15,7 @@ function check_CSV(searchspace, name_of_script ; test)
     println(name_of_script)
 
     if test == true
-        CSV_RUNS_FILE_NAME = "$(name_of_script[1])_$(split_str[1]).csv"
+        CSV_RUNS_FILE_NAME = "$(name_of_script[1])_$(split_str[1])_test.csv"
     else
         CSV_RUNS_FILE_NAME = "$(name_of_script[1])_$(split_str[1]).csv"
     end

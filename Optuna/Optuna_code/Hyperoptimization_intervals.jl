@@ -1,8 +1,6 @@
 
 
     using DataStructures
-    
-
 
     NSGA2_searchspace = OrderedDict(
         "N" => [5, 500],        # Changed lower from 1 to 10
@@ -63,7 +61,25 @@
     );
 
 
+    optuna_sampler_dict = Dict(
+        "NSGAIISampler" => optuna.samplers.NSGAIISampler
+        #"CmaEsSampler" => optuna.samplers.CmaEsSampler,
+        #"TPESampler" => optuna.samplers.TPESampler,
+        #"RandomSampler" => optuna.samplers.RandomSampler,
+        #"QMCSampler" => optuna.samplers.QMCSampler,
+        #"NSGAIIISampler" => optuna.samplers.NSGAIIISampler,
+        #"GPSampler" => optuna.samplers.GPSampler,
+        #"BruteForceSampler" => optuna.samplers.BruteForceSampler,
+        #"GridSampler" => () -> optuna.samplers.GridSampler(Algorithm_structure.Parameters_ranges)
+        )
+
+    sampler_vector =  collect(keys(optuna_sampler_dict))
+
+
     #NelderMead_searchspace  = OrderedDict(;
     # parameters = AdaptiveParameters(),
     # initial_simplex = AffineSimplexer()
     # )
+
+
+
