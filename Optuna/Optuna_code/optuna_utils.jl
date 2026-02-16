@@ -51,6 +51,8 @@ using DataFrames
         50 => [100000, 2000]
     )
 
+
+
     
 mutable struct Algorithm
     Name::Symbol
@@ -64,14 +66,23 @@ mutable struct Optimization_configuration
     max_trials::Int
 end
 
+mutable struct Problem
+
+
+end
+
+
+
+
 function getproblem(id::Int)
     f, conf = HardTestProblems.get_RW_MOP_problem(id)
+    problem_name = String(nameof(typeof(f)))
     reference_point = conf[:nadir]  
     bounds = hcat(conf[:xmin], conf[:xmax])
     if id == 25
         bounds = bounds[[2, 1], :]
     end
-    return f, bounds, reference_point 
+    return problem_name, f, bounds, reference_point 
 end
 
 function init_algorithm_structure(Name_algorithm::String)
@@ -204,7 +215,6 @@ function set_up_weights_MOEAD_DE(nobjectives = nothing , npartitions = nothing)
         npartitions = 50
     end
     weights = gen_ref_dirs(nobjectives, npartitions)
-    #println("Weights generated")
     return weights
    
 end
@@ -226,9 +236,6 @@ function set_up_algorithm(algorithm_instance, options:: Options; params=Dict(), 
             T = max(3, round(Int, 0.2*length(MOEAD_WEIGHTS)))
             n_r = max(2, round(Int, 0.05*length(MOEAD_WEIGHTS)))
 
-            #println("T :: $T")
-            #println("n_r :: $n_r")
-
             metaheuristic = base_algo(MOEAD_WEIGHTS; params..., T, n_r, options)
 
         else
@@ -242,42 +249,56 @@ function set_up_algorithm(algorithm_instance, options:: Options; params=Dict(), 
     return metaheuristic
 end
 
-function run_optimization(f, searchspace, 
-                    reference_point, params,
-                    Algorithm_structure, current_instance, 
-                    problem_name, length_of_runs_array, result_dir; MOEAD_WEIGHTS = nothing)
+
+function run_optimization(problem_data, params,
+                    Algorithm_structure, result_dir; MOEAD_WEIGHTS = nothing)
 
     hv_values = Dict()
     All_HV = Float64[]
     all_pareto_fronts = Dict()
-    num_ite = 100
+    num_ite = 20
+
+    
+    problem_name = problem_data[1]
+    f = problem_data[2]
+    searchspace = problem_data[3]
+    reference_point = problem_data[4]
+    num_runs = problem_data[5]
 
     algorithm_instance = Algorithm_structure.Name
 
-    #println("Using algorithm: $algorithm_instance")
-    options = Metaheuristics.Options(; iterations=num_ite, time_limit=4.0)
+   
+    cd("/home/afonso-meneses/Desktop/GitHub/DynamicOptimization")
+    open("log.txt", "a") do io
+
+        println(io, "Optimizing problem:: $problem_name", " reference_point:: $reference_point " 
+        , "num_runs:: $num_runs ", "algorithm_instance:: $algorithm_instance")
+    end
+
+    options = Options(iterations = num_ite, f_calls_limit = 1000000000)
+    
     metaheuristic = set_up_algorithm(algorithm_instance, options; params, HPO = true, MOEAD_WEIGHTS)#, CCMO = true) ### CCMO parameter
     
     cd(result_dir)
 
-    num_runs = length_of_runs_array[current_instance]
-    #println(num_runs)
-    if length_of_runs_array[current_instance] == "Inf" || length_of_runs_array[current_instance] > 100
-        println("Skipping instance $current_instance due to invalid run length.")
+    if num_runs == "Inf" || num_runs > 100
+        println("Skipping problem $problem_name due to invalid run length.")
         return -Inf, -Inf, -Inf
     end
 
-    #println("$(Algorithm_structure.Name) :: $(current_instance)")
     for i in 1:num_runs
         println("Starting task...")
         status = optimize(f, searchspace, metaheuristic)
+        display(status)
         println("Task Finished...")
         approx_front = get_non_dominated_solutions(status.population)
+        println(typeof(reference_point))
         push!(All_HV, hypervolume(approx_front, reference_point))
         front_objectives = get_non_dominated_solutions([sol.f for sol in approx_front])   
         field = "Run_$(i)_$(problem_name)"
         all_pareto_fronts[Symbol(field)] = front_objectives
     end
+
 
     #println(all_pareto_fronts)
 
@@ -291,23 +312,16 @@ function run_optimization(f, searchspace,
 
 end
 
-function objective(trial, current_instance, sampler_func,Algorithm_structure, length_of_runs_array, result_dir)
-    
+function objective(trial, sampler_func, Algorithm_structure, result_dir, problem_data)
 
-    problem_name = HardTestProblems.NAME_OF_PROBLEMS_RW_MOP_2021[current_instance]
-    #println("Optimizing problem: ", problem_name)
-    f, searchspace, reference_point = getproblem(current_instance)  
-    #println(searchspace)
+    problem_name = problem_data[1] 
+    reference_point = problem_data[4]
 
-    if haskey(ref_points_offset, current_instance)
-            reference_point = ref_points_offset[current_instance]
-    end
-    
     params, weights = set_configuration_optuna(trial, Algorithm_structure, sampler_func, reference_point)
-    
-    hv_value, All_HV, all_pareto_fronts = run_optimization(f, searchspace, reference_point, params, 
-                                                            Algorithm_structure, current_instance, 
-                                                            problem_name, length_of_runs_array, result_dir; MOEAD_WEIGHTS = weights)
+  
+    hv_value, All_HV, all_pareto_fronts = run_optimization(problem_data, params, 
+                                                            Algorithm_structure, 
+                                                            result_dir; MOEAD_WEIGHTS = weights)
 
                                                             
     if hv_value == -Inf && All_HV == -Inf
@@ -325,18 +339,13 @@ function objective(trial, current_instance, sampler_func,Algorithm_structure, le
     return hv_max
 end
 
-
-function init_parallel_arrays(; sampler_vector, lb_instaces::Int64, hb_instaces::Int64)
-    if 0 < lb_instaces < 51 || 0 < hb_instaces < 51
-        problem_instances = lb_instaces:hb_instaces
-        algo_instances = 1:length(sampler_vector)
-        algo_instances_array = vcat([algo_instances for _  in problem_instances]...)    
-        problem_instances_array = [prob_i for prob_i in problem_instances for _ in algo_instances]
-        return problem_instances_array, algo_instances_array
-    else
-        error("Please make sure the lower bound and the higher bound cover an interval between 1 and 50")
-    end
+function init_parallel_arrays(sampler_vector, problem_instances::UnitRange{Int64})
+    algo_instances = 1:length(sampler_vector)
+    algo_instances_array = vcat([algo_instances for _  in problem_instances]...)    
+    problem_instances_array = [prob_i for prob_i in problem_instances for _ in algo_instances]
+    return problem_instances_array, algo_instances_array
 end
+
 
 function initialize_algorithm_structures(alg)
         
@@ -352,12 +361,219 @@ function initialize_algorithm_structures(alg)
     return All_Algorithm_structure
 end
 
-function initialize_runs_dicts(All_Algorithm_structure)
+function initialize_runs_dicts(All_Algorithm_structure, problem_dataframe :: DataFrame, lower_bound::Int64, upper_bound::Int64 )
 
-    runs_dicts = Dict()
+    
     for Algorithm_structure in All_Algorithm_structure
-        df = CSV.read("minimum_runs_$(Algorithm_structure.Name).csv", DataFrame; header=false)
+        runs_dicts = Dict()
+        if isfile("minimum_runs_$(Algorithm_structure.Name).csv")
+            df = CSV.read("minimum_runs_$(Algorithm_structure.Name).csv", DataFrame; header=false)
+        else
+            error("minimum_runs_$(Algorithm_structure.Name).csv is not in the current folder, please switch to the folder where its located or run get_minimum_runs() to generate it")
+        end
+    
         runs_dicts = get_df_column_values(df,6, 10, Algorithm_structure.Name, runs_dicts)
+        problem_dataframe[!, Algorithm_structure.Name] = runs_dicts[Algorithm_structure.Name][lower_bound:upper_bound]
     end
-    return runs_dicts
+
+    return problem_dataframe
 end
+
+function benchmark_handler(All_Algorithm_structure, lower_bound::Int64, upper_bound::Int64)
+
+    if !(lower_bound < upper_bound && upper_bound <= 50 && lower_bound <= 50)
+        error("Invalid bounds")
+    end
+
+    problem_dataframe = DataFrame(
+        problems_names = String[],
+        problem_function = Function[],
+        problem_bounds = Any[],
+        problem_reference_point = Any[]
+    )
+
+    for i in lower_bound:upper_bound
+
+        probl_name, f, bounds, reference_point = getproblem(i)
+
+        if haskey(ref_points_offset, i)
+            reference_point = ref_points_offset[i]
+        end
+
+        push!(problem_dataframe, (
+            problems_names = probl_name,
+            problem_function = f,
+            problem_bounds = bounds,
+            problem_reference_point = reference_point
+        ))
+    end
+
+    problem_dataframe = initialize_runs_dicts(All_Algorithm_structure, problem_dataframe, lower_bound, upper_bound)
+
+    return problem_dataframe
+end
+
+
+function unravel_df(problem_dataframe::DataFrame, algorithm_name::String, problem_instance::Int)
+
+    DataFrame_options = OrderedDict(
+                                "problems_names" => 1, 
+                                "problem_function" => 2,
+                                "problem_bounds" => 3, 
+                                "problem_ref_point" => 4,
+                                "algorithm_name"=> 5) 
+
+  
+    problem_name_vector = problem_dataframe[!, 1]
+    problem_function_vector = problem_dataframe[!, 2]
+    problem_bounds =  problem_dataframe[!, 3]
+    problem_ref_point = problem_dataframe[!, 4]
+
+    problem_name = problem_name_vector[problem_instance]
+    problem_function = problem_function_vector[problem_instance]
+    problem_bounds = problem_bounds[problem_instance]
+    problem_ref_point = problem_ref_point[problem_instance] 
+    #problem_algo_run = problem_dataframe[problem_dataframe.problems_names .== problem_name , algorithm_name]
+    problem_algo_run = problem_dataframe[problem_instance, algorithm_name]
+
+    return problem_name, problem_function, problem_bounds, problem_ref_point, problem_algo_run
+
+end
+
+function run_trial(sampler_instance::Int, Algorithm_structure, sampler_vector, result_dir::String, iteration_counts, problem_instance, problem_dataframe)
+    
+    problem_name, f, searchspace, reference_point, num_runs = unravel_df(problem_dataframe, String(Algorithm_structure.Name), problem_instance)
+
+    problem_data = [problem_name, f, searchspace, reference_point, num_runs]
+
+    sampler_name = sampler_vector[sampler_instance]
+    println("sampler_name :: $sampler_name")
+    sampler_module = optuna.samplers
+    sampler_func = getproperty(sampler_module, Symbol(sampler_name))
+
+    if sampler_name == "GridSampler"
+        sampler_constructor = sampler_func(Algorithm_structure.Parameters_ranges)
+    else
+        sampler_constructor = sampler_func()
+    end
+    
+    println("sampler_func  " ,sampler_func)
+    study = optuna.create_study(
+        study_name = problem_name,
+        direction = "maximize",
+        sampler = sampler_constructor
+    )
+    
+
+ 
+    study.optimize(trial -> objective(trial, sampler_func, Algorithm_structure, result_dir, problem_data), n_trials = n_trials)
+
+    if isnan(study.best_value) || study.best_value == -Inf || !haskey(study.best_trial.user_attrs, "All_HV")
+        println("No valid result for $problem_name")
+        return nothing
+    end
+
+    All_HV = study.best_trial.user_attrs["All_HV"]
+    PF_best = study.best_trial.user_attrs["PF"]
+
+    opt_results_df = DataFrame(
+        algorithm_name = Symbol[],
+        sampler = String[],
+        solutions = Vector{Any}[],
+    )
+    for (key, PF) in PF_best
+    
+        push!(opt_results_df, (algorithm_name = Symbol(key), sampler = study[:sampler][:__class__][:__name__], solutions = PF,))
+    end
+
+    problem_folder_name = "Problem_$(problem_instance)_$(problem_name)"
+    problem_dir, iter_dir = create_directories(String(Algorithm_structure.Name), iteration_counts, problem_folder_name, result_dir)
+    cd(problem_dir)
+
+    CSV_NAME = "$(Symbol(problem_name))_$(problem_instance)_$(study[:sampler][:__class__][:__name__])_$(Algorithm_structure.Name)_obtained_solutions.csv"
+    CSV.write(CSV_NAME, opt_results_df)
+
+    return (
+        algorithm_name = Algorithm_structure.Name,
+        sampler = study[:sampler][:__class__][:__name__],
+        problem_name = problem_name,
+        problem_instance = problem_instance,
+        hv_value = study.best_value,
+        params = study.best_params,
+        #all_hv = [JSON.json(All_HV)]
+    )
+
+end
+
+function run_HPO(sampler_vector, iteration_counts, result_dir, All_Algorithm_structure, problem_dataframe; )
+        
+        results = []
+       
+        problem_instances = 1:nrow(problem_dataframe)
+        problem_instances_array, sampler_instances_array = init_parallel_arrays(sampler_vector, problem_instances) 
+        results = @distributed (vcat) for Algorithm_structure in collect(All_Algorithm_structure)
+            
+            
+            println("Currently Testing : $(Algorithm_structure.Name)")
+            task = (sampler_instance, prob) -> run_trial(sampler_instance, Algorithm_structure, sampler_vector, result_dir, iteration_counts, prob, problem_dataframe)
+            pmap_results = pmap(task, sampler_instances_array, problem_instances_array)
+            [pmap_results]
+        end
+   
+
+    return results
+end
+
+
+        
+
+#for alg in algorithms
+
+#    CSV_RUNS_FILE_NAME, CSV_LENGTH_RESULTS_NAME = check_CSV(alg, main_script_name; test = false)
+#    Algorithm_structure = detect_searchspaces(alg)
+#    pop_size = Algorithm_structure.Parameters[:N]
+#    max_evals = pop_size * n_iterations
+#    results = []
+#    hv_values = Dict()
+
+#    algorithm_instance = Algorithm_structure.Name
+#    println("Using algorithm: $algorithm_instance")
+#    options = Metaheuristics.Options(iterations = n_iterations, f_calls_limit = 3 * max_evals)
+#    metaheuristic = set_up_algorithm(algorithm_instance, options)
+#    #metaheuristic = MixedInteger(metaheuristic)
+#    All_HV = Dict(:Hypervolumes => Float64[])
+#    num_runs = 10
+#    reference_point = [10, 4000]
+
+#    @time for i in 1:num_runs
+#        println("Starting task...")
+#        status = optimize(problem, mixed_space, metaheuristic)
+#        display(status)
+#        println("Task Finished... iteration : $i")
+#        approx_front = get_non_dominated_solutions(status.population)
+#        HV = hypervolume(approx_front, reference_point) 
+#        push!(All_HV[:Hypervolumes], HV) 
+#        #push!(All_SOL[:Solutions], [JSON.json(approx_front)]) 
+#    end
+
+#    if pwd() !== result_dir
+#        cd(result_dir)
+#    end
+
+#    results = All_HV
+
+#    all_sol = All_SOL
+
+#    type_of_result = first(keys(results))                
+
+#    println("Results::$results")
+
+#    hv_values[n_iterations] = mean(results[type_of_result])
+
+#   println("Hypervolume: $(hv_values[n_iterations])")
+
+#    problem_name = "parametric_truss_example"
+#    current_instance = 0
+#    get_minimum_runs(results, problem_name, current_instance, CSV_RUNS_FILE_NAME)
+
+#end

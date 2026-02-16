@@ -119,3 +119,57 @@ for searchspace in alg
             get_minimum_runs(results, problem_name, current_instance, CSV_RUNS_FILE_NAME)
     end
 end
+
+
+
+function get_minimum_runs_parametric_truss(alg, main_script_name, n_iterations, num_runs; problem = problem, integer_space = integer_space)
+        
+    CSV_RUNS_FILE_NAME, _ = check_CSV(alg, main_script_name; test = false)
+    Algorithm_structure = detect_searchspaces(alg)
+    pop_size = Algorithm_structure.Parameters[:N]
+    max_evals = pop_size * n_iterations
+    results = []
+    hv_values = Dict()
+
+    algorithm_instance = Algorithm_structure.Name
+    println("Using algorithm: $algorithm_instance")
+    options = Metaheuristics.Options(iterations = n_iterations, f_calls_limit = 3 * max_evals)
+    metaheuristic = set_up_algorithm(algorithm_instance, options)
+
+    All_HV = Dict(:Hypervolumes => Float64[])
+    
+    reference_point = [10, 4000]
+
+    @time for i in 1:num_runs
+        println("Starting task...")
+        status = optimize(problem, integer_space, metaheuristic)
+        display(status)
+        println("Task Finished... iteration : $i")
+        approx_front = get_non_dominated_solutions(status.population)
+        HV = hypervolume(approx_front, reference_point) 
+        push!(All_HV[:Hypervolumes], HV) 
+    end
+
+    if pwd() !== result_dir
+        cd(result_dir)
+    end
+
+    results = All_HV
+
+
+    type_of_result = first(keys(results))                
+
+    println("Results::$results")
+
+    hv_values[n_iterations] = mean(results[type_of_result])
+
+    println("Hypervolume: $(hv_values[n_iterations])")
+
+    problem_name = "parametric_truss_example_n_iterations_$(n_iterations)_num_runs$(num_runs)"
+    current_instance = 0
+    get_minimum_runs(results, problem_name, current_instance, CSV_RUNS_FILE_NAME)
+end
+
+#for alg in algorithms
+#     get_minimum_runs_parametric_truss(alg, main_script_name, n_iterations, num_runs)
+#end
