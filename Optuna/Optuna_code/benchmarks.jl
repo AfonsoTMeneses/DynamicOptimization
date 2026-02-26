@@ -31,7 +31,7 @@ results_path = joinpath(base_dir, "$(main_script_name)_Results")
 cd(results_path)
 
 #@everywhere begin
-    n_trials = 2
+    n_trials = 100
     All_Algorithm_structure = initialize_algorithm_structures(algorithms)
 #end
 
@@ -40,7 +40,7 @@ cd(results_path)
     ###########
 
     lb_instaces = 1
-    hb_instaces = 5
+    hb_instaces = 50
     problem_dataframe = DataFrame()
     problem_dataframe = benchmark_handler(All_Algorithm_structure, lb_instaces, hb_instaces, main_script_name)
     results = []
