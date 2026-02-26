@@ -129,7 +129,6 @@ function get_default_kwargs(algorithm)
 end
 
 function initialize_algorithm_structures(alg)
-    # FIX (minor): typed Vector{Algorithm} instead of Any[]
     All_Algorithm_structure = Vector{Algorithm}()
     for searchspace in alg
         Algorithm_structure = detect_searchspaces(searchspace)
