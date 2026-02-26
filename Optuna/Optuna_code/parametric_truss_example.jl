@@ -1,15 +1,15 @@
 #using KhepriAutoCAD
 #Pkg.add(url="https://github.com/aptmcl/KhepriFrame3DD.jl")
 #Pkg.add(url="https://github.com/ines-pereira/Metaheuristics.jl")
-#using Distributed
-#addprocs(3)
+using Distributed
+addprocs(3)
 
 
 #ENV["PYTHON"] = "/home/afonso-meneses/Desktop/GitHub/python3.11_env/bin/python3.11" 
 #Pkg.build("PyCall")
 
 
-#@everywhere begin
+@everywhere begin
     #using Pkg
     #ENV["PYTHON"] = "/home/afonso-meneses/Desktop/GitHub/new_env/bin/python3"
     #ENV["PYCALL_JL_RUNTIME_PYTHON"] = Sys.which("python3")
@@ -21,7 +21,6 @@
     include(joinpath(@__DIR__, "Hyperoptimization_intervals.jl"))
     include(joinpath(@__DIR__, "utils_minimum_runs.jl"))
     include(joinpath(@__DIR__, "optuna_utils.jl"))
-    include(joinpath(@__DIR__, "optuna_script.jl"))
     using Metaheuristics
     using Metaheuristics: optimize, get_non_dominated_solutions, pareto_front, Options
     import Metaheuristics.PerformanceIndicators: hypervolume
@@ -31,17 +30,17 @@
     using Statistics
     using JSON
     using HardTestProblems
-#end
+end
     
 # Truss Geometry ---------------------------------------------------------------
     
-#@everywhere begin
+@everywhere begin
     my_free_truss_node_family = truss_node_family_element(default_truss_node_family(), support=false)
     free_node(pt) = truss_node(pt, family=my_free_truss_node_family)
     fixed_node(pt) = truss_node(pt, family=fixed_truss_node_family)
-#end
+end
 
-#@everywhere begin
+@everywhere begin
     space_frame(ptss) =
         let ais = ptss[1],
             bis = ptss[2],
@@ -69,10 +68,10 @@
             end
         end
 
-#end
+end
 
 
-#@everywhere begin
+@everywhere begin
     parametric_truss(x11, y11, z11, x12, y12, z12, x13, y13, z13, x21, y21, z21, x22, y22, z22, x31, y31, z31, x32, y32, z32, x33, y33, z33, x41, y41, z41, x42, y42, z42, x51, y51, z51, x52, y52, z52, x53, y53, z53) =
         let p11 = xyz(x11, y11, z11),
             p12 = xyz(x12, y12, z12),
@@ -94,11 +93,11 @@
                 [p41, p42],
                 [p51, p52, p53]])
         end
-#end
+end
 #delete_all_shapes()
 #parametric_truss(0, 0, 0, 1, 0, 0, 2, 0, 0, 0.5, 0.5, 1, 1.5, 0.5, 1, 0, 1, 0, 1, 1, 0, 2, 1, 0, 0.5, 1.5, 1, 1.5, 1.5, 1, 0, 2, 0, 1, 2, 0, 2, 2, 0)
 
-#@everywhere begin
+@everywhere begin
     fixed_parametric_truss(
         x12, y12, z12,
         x21, y21, z21,
@@ -116,7 +115,7 @@
                 x41, y41, z41, x42, y42, z42,
                 0, 20, 0, x52, y52, z52, 20, 20, 0)
         end
-#end
+end
 #delete_all_shapes()
 #fixed_parametric_truss(
 #    1.3, 0, 0,
@@ -145,17 +144,17 @@ random_fixed_parametric_truss(r) =
 # Truss Analysis and Optimization ----------------------------------------------
 
 ## Helper Functions
-#@everywhere begin
-
+@everywhere begin
+    
     step_size = 0.01    
     int2float(x, min, step = step_size) =
         min + step * x
 
     bounds_coordinates(v, r=0.3) = (v - r, v + r) .* 10
-#end
+end
 ## Materials Young's Modulus and Cost
 
-#@everywhere begin
+@everywhere begin
     materials_e = [
         1.6409e11, # Cast Iron ASTM A536
         1.86e11,   # Steel, stainless AISI 302
@@ -173,14 +172,14 @@ random_fixed_parametric_truss(r) =
         2750.0,    # Alloy Steel, AISI 4140
         1825.0,    # Stainless Steel AISI 201
     ]
-#end
+end
 ## Objectives
 #=
 The objectives for the optimization are:
   (1) minimizing the maximum displacement,
   (2) minimizing the material cost of the truss structure.
 =#
-#@everywhere begin
+@everywhere begin
 
     r = 0.4
     x12_interval = bounds_coordinates(1, r)
@@ -265,9 +264,9 @@ The objectives for the optimization are:
             end
         end
     end
-#end
+end
 
-#@everywhere begin
+@everywhere begin
     
     problem(x) = 
         (objectives(
@@ -277,7 +276,7 @@ The objectives for the optimization are:
             x[16], x[17], x[18], x[19], x[20],
             x[21], x[22], x[23]),
         [0.0], [0.0])
-#end
+end
 #@everywhere begin
 #    problem(x) =
 #    (objectives(
@@ -294,7 +293,7 @@ The objectives for the optimization are:
 
 #end
 ## Variables
-#@everywhere begin
+@everywhere begin
     n_vars = 23
 
     material_idx = 1:6
@@ -357,7 +356,7 @@ The objectives for the optimization are:
     #continuous_space = BoxConstrainedSpace(points_lb, points_ub)
 
     #mixed_space = MixedSpace(:integer => integer_space, :continuous => continuous_space)
-#end
+end
 #end 
 #=
 vars_bounds =
@@ -378,81 +377,76 @@ vars_bounds =
 
 
 ## Test Optimization
-#@everywhere begin
-    global base_dir = pwd()
-    main_script_name = basename(abspath(@__FILE__))
-    algorithms = ["NSGA2_searchspace"]
-    #MOEAD_DE_searchspace,"NSGA2_searchspace", "SPEA2_searchspace", "SMS_EMOA_searchspace"]
-    result_dir = "/home/afonso-meneses/Desktop/GitHub/DynamicOptimization/Optuna/Results/parametric_truss_example_Results"
-    results_path = joinpath(splitdir(@__DIR__)[1], "Results/parametric_truss_example_Results")   
-#end
+@everywhere begin
+    base_dir = "/home/afonso-meneses/Desktop/GitHub/DynamicOptimization/Optuna/Results/"
+    main_script_name = split(basename(abspath(@__FILE__)), ".jl")[1]
+    algorithms = ["MOEAD_DE_searchspace","NSGA2_searchspace", "SPEA2_searchspace", "SMS_EMOA_searchspace"]
+    results_path = joinpath(base_dir, "$(main_script_name)_Results")
+    cd(results_path)
+end
 
-#@everywhere begin
-    n_iterations = 50
-    num_runs = 100
-    n_trials = 2
+
+for alg in algorithms
+    suffix = split(alg, "_searchspace")[1]
+    path = String(joinpath(results_path, suffix))
+    remove_existing_csv(path)
+end
+
+
+
+@everywhere begin
+    n_trials = 100
     All_Algorithm_structure = initialize_algorithm_structures(algorithms)
-#end
+end
+
+    log_file = joinpath(base_dir, "log.txt")
+    if isfile(log_file)
+        rm(log_file)
+    end
 
 
-#@everywhere begin
+@everywhere begin
     
-
-#end
-
-
-#@everywhere begin
-    
-    reference_point = [10,4000]
-
-    problem_data = [problem, integer_space, reference_point]
+    reference_point = [10, 4000]
 
     problem_dataframe = DataFrame(
-                problems_names = "parametric_truss_example",
-                problem_function = problem_data[1],
-                problem_bounds = problem_data[2],
+                problems_names   = "parametric_truss_example",
+                problem_function = problem,
+                problem_bounds   = integer_space,
                 problem_ref_point = [reference_point],
     )
 
+end
 
-    
-#end
+options_dataframe = DataFrame(
+                    x_tol               = 1e-8,
+                    f_tol               = 1e-12,
+                    f_tol_rel           = eps(),
+                    f_tol_abs           = 0.0,
+                    g_tol               = 0.0,
+                    h_tol               = 0.0,
+                    f_calls_limit       = 1000000000,
+                    time_limit          = Inf,
+                    iterations          = 50,
+                    store_convergence   = false,
+                    debug               = false,
+                    parallel_evaluation = false,
+                    verbose             = false
+                )
+
+options_dict = push_options(options_dataframe)
 
 
-results = []
-using Distributed
 run(`clear`)
-include(joinpath(@__DIR__, "optuna_utils.jl"))
+
 @time results = run_HPO(
                 sampler_vector,
-                n_iterations,
-                result_dir,
+                options_dict,
+                results_path,
                 All_Algorithm_structure,
-                problem_dataframe)
+                problem_dataframe,
+                main_script_name, n_trials)
+
+write_HPO_data_into_csv(results, options_dict, results_path)
 
 
-
-
-include(joinpath(@__DIR__, "optuna_utils.jl"))
-
-
-df = DataFrame()
-
-alg = ["NSGA2_searchspace"]
-All_Algorithm_structure = initialize_algorithm_structures(alg)
-algorithm = All_Algorithm_structure[1]
-typeof(String(algorithm.Name))
-df = benchmark_handler(All_Algorithm_structure, 1, 20)
-
-cd(result_dir)
-run(`clear`)
-
-unravel_df(df, String(algorithm.Name))
-
-#problem = 2
-searchspace=2
-reference_point = 1
-num_runs = 2
-problem_data = [problem, searchspace, reference_point, num_runs]
-
-problem_data[1]

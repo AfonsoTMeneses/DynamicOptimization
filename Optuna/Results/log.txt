@@ -1,0 +1,6 @@
+Optimizing problem:: parametric_truss_example reference_point:: [10, 4000] num_runs:: 1 algorithm_instance:: MOEAD_DE
+Optimizing problem:: parametric_truss_example reference_point:: [10, 4000] num_runs:: 1 algorithm_instance:: SPEA2
+OA
+Optimizing problem:: parametric_truss_example reference_point:: [10, 4000] num_runs:: 1 algorithm_instance:: SPEA2
+Optimizing problem:: parametric_truss_example reference_point:: [10, 4000] num_runs:: 1 algorithm_instance:: MOEAD_DE
+Optimizing problem:: parametric_truss_example reference_point:: [10, 4000] num_runs:: 1 algorithm_instance:: SMS_EMOA

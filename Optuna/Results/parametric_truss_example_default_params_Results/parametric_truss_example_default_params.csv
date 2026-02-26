@@ -1,0 +1,5 @@
+algorithm_name,problem_name,hv_value
+SMS_EMOA,parametric_truss_example_default_params,Any[35716.75567621239]
+NSGA2,parametric_truss_example_default_params,Any[36001.61090641225]
+MOEAD_DE,parametric_truss_example_default_params,Any[35625.86102756738]
+SPEA2,parametric_truss_example_default_params,Any[35742.806845741754]
