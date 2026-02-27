@@ -1,8 +1,8 @@
 
-#using Distributed
-#addprocs(3)
+using Distributed
+addprocs(3)
 
-#@everywhere begin
+@everywhere begin
     #using Pkg
     #ENV["PYTHON"] = "/home/afonso-meneses/Desktop/GitHub/python_env/bin/python" 
     #Pkg.build("PyCall")
@@ -20,33 +20,37 @@
     optuna = pyimport("optuna")
     include(joinpath(@__DIR__, "Hyperoptimization_intervals.jl"))
     include(joinpath(@__DIR__, "optuna_utils.jl"))
-#end  
+end  
 
-run(`clear`)
+@everywhere begin
+    algorithms = ["MOEAD_DE_searchspace","NSGA2_searchspace", "SPEA2_searchspace", "SMS_EMOA_searchspace"]
+    main_script_name = split(basename(abspath(@__FILE__)), ".jl")[1]
+    results_path = normpath(dirname(@__DIR__),"Results/$(main_script_name)_Results")
+    cd(results_path)
+end
 
-base_dir = "/home/afonso-meneses/Desktop/GitHub/DynamicOptimization/Optuna/Results/"
-algorithms = ["MOEAD_DE_searchspace","NSGA2_searchspace", "SPEA2_searchspace", "SMS_EMOA_searchspace"]
-main_script_name = split(basename(abspath(@__FILE__)), ".jl")[1]
-results_path = joinpath(base_dir, "$(main_script_name)_Results") 
-cd(results_path)
 
-#@everywhere begin
+
+@everywhere begin
     n_trials = 100
     All_Algorithm_structure = initialize_algorithm_structures(algorithms)
-#end
+end
 
     ###########
     ########### HPO
     ###########
-
+@everywhere begin
     lb_instaces = 1
     hb_instaces = 50
     problem_dataframe = DataFrame()
     problem_dataframe = benchmark_handler(All_Algorithm_structure, lb_instaces, hb_instaces, main_script_name)
     results = []
-    run(`clear`)
+
+end
 
 
+@everywhere begin
+    
     options_dataframe = DataFrame(
                     x_tol = 1e-8,
                     f_tol = 1e-12,
@@ -66,6 +70,7 @@ cd(results_path)
 
 
     options_dict = push_options(options_dataframe)
+end
 
     @time results = run_HPO(sampler_vector, options_dict, results_path, All_Algorithm_structure, problem_dataframe, main_script_name, n_trials)
     # pmap -- 25.687724 seconds (2.98 M allocations: 203.145 MiB, 0.33% gc time, 8.33% compilation time: 4% of which was recompilation)
@@ -73,7 +78,6 @@ cd(results_path)
 
    
     #println("Summary of best trials:")
-
 
 
 write_HPO_data_into_csv(results, options_dict, results_path)

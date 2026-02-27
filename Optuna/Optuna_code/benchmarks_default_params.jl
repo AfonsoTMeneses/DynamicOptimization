@@ -13,12 +13,10 @@ optuna = pyimport("optuna")
 include(joinpath(@__DIR__, "Hyperoptimization_intervals.jl"))
 include(joinpath(@__DIR__, "optuna_utils.jl"))
 
-run(`clear`)
 
-base_dir = "/home/afonso-meneses/Desktop/GitHub/DynamicOptimization/Optuna/Results/"
 algorithms = ["MOEAD_DE_searchspace", "NSGA2_searchspace", "SPEA2_searchspace", "SMS_EMOA_searchspace"]
 main_script_name = split(basename(abspath(@__FILE__)), ".jl")[1]
-results_path = joinpath(base_dir, "$(main_script_name)_Results")
+results_path = normpath(dirname(@__DIR__),"Results/$(main_script_name)_Results")
 cd(results_path)
 
 All_Algorithm_structure = initialize_algorithm_structures(algorithms)
@@ -27,7 +25,6 @@ lb_instaces = 1
 hb_instaces = 50
 problem_dataframe = benchmark_handler(All_Algorithm_structure, lb_instaces, hb_instaces, main_script_name)
 
-run(`clear`)
 
 options_dataframe = DataFrame(
     x_tol               = 1e-8,
@@ -45,7 +42,6 @@ options_dataframe = DataFrame(
     verbose             = false
 )
 
-run(`clear`)
 
 options_dict = push_options(options_dataframe)
 problem_dataframe = initialize_runs_dicts(All_Algorithm_structure, main_script_name, problem_dataframe, 1, nrow(problem_dataframe))

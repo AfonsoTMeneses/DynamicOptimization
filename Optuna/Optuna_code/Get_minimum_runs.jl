@@ -17,7 +17,6 @@ include(joinpath(@__DIR__, "optuna_utils.jl"))
 
 main_script_name = String(split(basename(abspath(@__FILE__)), ".jl")[1])
 
-run(`clear`)
 
 result_dir = joinpath(@__DIR__, "Results")
 
@@ -52,8 +51,6 @@ for searchspace in algorithms
     optuna_configuration = Optimization_configuration(1, 50, 100)
 
     num_runs = 100
-
-    run(`clear`)
 
     for current_instance in optuna_configuration.lb_instances:optuna_configuration.hb_instance
 

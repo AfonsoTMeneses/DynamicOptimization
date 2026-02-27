@@ -378,13 +378,11 @@ vars_bounds =
 
 ## Test Optimization
 @everywhere begin
-    base_dir = "/home/afonso-meneses/Desktop/GitHub/DynamicOptimization/Optuna/Results/"
     main_script_name = split(basename(abspath(@__FILE__)), ".jl")[1]
     algorithms = ["MOEAD_DE_searchspace","NSGA2_searchspace", "SPEA2_searchspace", "SMS_EMOA_searchspace"]
-    results_path = joinpath(base_dir, "$(main_script_name)_Results")
+    results_path = normpath(dirname(@__DIR__),"Results/$(main_script_name)_Results")
     cd(results_path)
 end
-
 
 for alg in algorithms
     suffix = split(alg, "_searchspace")[1]
@@ -435,9 +433,6 @@ options_dataframe = DataFrame(
                 )
 
 options_dict = push_options(options_dataframe)
-
-
-run(`clear`)
 
 @time results = run_HPO(
                 sampler_vector,

@@ -15,13 +15,12 @@ include(joinpath(@__DIR__, "optuna_utils.jl"))
 include(joinpath(@__DIR__, "parametric_truss_example.jl"))
 include(joinpath(@__DIR__, "utils_minimum_runs.jl"))
 
-base_dir = "/home/afonso-meneses/Desktop/GitHub/DynamicOptimization/Optuna/Results/"
 algorithms = ["MOEAD_DE_searchspace","NSGA2_searchspace", "SPEA2_searchspace", "SMS_EMOA_searchspace"]
 main_script_name = split(basename(abspath(@__FILE__)), ".jl")[1]
-results_path = joinpath(base_dir, "$(main_script_name)_Results")   
+results_path = normpath(dirname(@__DIR__),"Results/$(main_script_name)_Results")
 cd(results_path)
-All_Algorithm_structure = initialize_algorithm_structures(algorithms)
 
+All_Algorithm_structure = initialize_algorithm_structures(algorithms)
 
 delete_file("log.txt", "/home/afonso-meneses/Desktop/GitHub/DynamicOptimization")
 
@@ -56,7 +55,6 @@ options_dataframe = DataFrame(
                     verbose = false
                 )
 
-run(`clear`)
 
 
 problem_name, problem_function,

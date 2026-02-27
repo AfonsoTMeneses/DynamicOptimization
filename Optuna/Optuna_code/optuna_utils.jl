@@ -290,7 +290,7 @@ end
 # ─────────────────────────────────────────────
 
 function create_directories(metaheuristic_str::String, num_ite::Int64, problem_folder_name::String, path::String)
-    algorithm_dir = joinpath(string(path), metaheuristic_str)
+    algorithm_dir = joinpath(path, metaheuristic_str)
     mkpath(algorithm_dir)
     iter_dir = joinpath(algorithm_dir, string(num_ite))
     mkpath(iter_dir)
@@ -537,6 +537,7 @@ end
 function write_HPO_data_into_csv(results, options_dict, results_path)
     for alg_results in results
         for r in alg_results
+            println(r)
             if !isnothing(r)
                 result_df = DataFrame(
                     algorithm_name   = Symbol[],
