@@ -391,7 +391,7 @@ end
 
 
 @everywhere begin
-    n_trials = 2
+    n_trials = 100
     All_Algorithm_structure = initialize_algorithm_structures(algorithms)
 end
 

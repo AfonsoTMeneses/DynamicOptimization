@@ -32,7 +32,7 @@ end
 
 
 @everywhere begin
-    n_trials = 2
+    n_trials = 100
     All_Algorithm_structure = initialize_algorithm_structures(algorithms)
 end
 
@@ -41,7 +41,7 @@ end
     ###########
 @everywhere begin
     lb_instaces = 1
-    hb_instaces = 2
+    hb_instaces = 50
     problem_dataframe = DataFrame()
     problem_dataframe = benchmark_handler(All_Algorithm_structure, lb_instaces, hb_instaces, main_script_name)
     results = []
