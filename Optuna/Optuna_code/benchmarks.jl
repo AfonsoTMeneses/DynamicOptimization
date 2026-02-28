@@ -1,6 +1,6 @@
 
 using Distributed
-addprocs(3)
+addprocs(4)
 
 @everywhere begin
     #using Pkg
@@ -32,7 +32,7 @@ end
 
 
 @everywhere begin
-    n_trials = 100
+    n_trials = 2
     All_Algorithm_structure = initialize_algorithm_structures(algorithms)
 end
 
@@ -41,7 +41,7 @@ end
     ###########
 @everywhere begin
     lb_instaces = 1
-    hb_instaces = 50
+    hb_instaces = 2
     problem_dataframe = DataFrame()
     problem_dataframe = benchmark_handler(All_Algorithm_structure, lb_instaces, hb_instaces, main_script_name)
     results = []
@@ -50,7 +50,7 @@ end
 
 
 @everywhere begin
-    
+   
     options_dataframe = DataFrame(
                     x_tol = 1e-8,
                     f_tol = 1e-12,
@@ -72,9 +72,13 @@ end
     options_dict = push_options(options_dataframe)
 end
 
-    @time results = run_HPO(sampler_vector, options_dict, results_path, All_Algorithm_structure, problem_dataframe, main_script_name, n_trials)
+    elapsed_time = @elapsed results = run_HPO(sampler_vector, options_dict, results_path, All_Algorithm_structure, problem_dataframe, main_script_name, n_trials)
     # pmap -- 25.687724 seconds (2.98 M allocations: 203.145 MiB, 0.33% gc time, 8.33% compilation time: 4% of which was recompilation)
     # map -- 38.523086 seconds (38.27 M allocations: 14.290 GiB, 5.12% gc time, 25.31% compilation time: 18% of which was recompilation)
+    open("time_run_HPO_$(main_script_name).txt", "a") do io
+        println(io, "run_HPO elapsed time: $(round(elapsed_time, digits=2))s ($(round(elapsed_time/60, digits=2)) min)")
+    end
+
 
    
     #println("Summary of best trials:")

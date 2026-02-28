@@ -2,8 +2,8 @@
 #Pkg.add(url="https://github.com/aptmcl/KhepriFrame3DD.jl")
 #Pkg.add(url="https://github.com/ines-pereira/Metaheuristics.jl")
 using Distributed
-addprocs(3)
-
+#Sys.CPU_THREADS - 1
+addprocs(4)
 
 #ENV["PYTHON"] = "/home/afonso-meneses/Desktop/GitHub/python3.11_env/bin/python3.11" 
 #Pkg.build("PyCall")
@@ -19,7 +19,6 @@ addprocs(3)
     using KhepriFrame3DD
     using Distributed
     include(joinpath(@__DIR__, "Hyperoptimization_intervals.jl"))
-    include(joinpath(@__DIR__, "utils_minimum_runs.jl"))
     include(joinpath(@__DIR__, "optuna_utils.jl"))
     using Metaheuristics
     using Metaheuristics: optimize, get_non_dominated_solutions, pareto_front, Options
@@ -391,13 +390,12 @@ for alg in algorithms
 end
 
 
-
 @everywhere begin
-    n_trials = 100
+    n_trials = 2
     All_Algorithm_structure = initialize_algorithm_structures(algorithms)
 end
 
-    log_file = joinpath(base_dir, "log.txt")
+    log_file = joinpath(abspath(joinpath(@__DIR__, "../..")), "log_$(main_script_name).txt")
     if isfile(log_file)
         rm(log_file)
     end
@@ -416,31 +414,38 @@ end
 
 end
 
-options_dataframe = DataFrame(
-                    x_tol               = 1e-8,
-                    f_tol               = 1e-12,
-                    f_tol_rel           = eps(),
-                    f_tol_abs           = 0.0,
-                    g_tol               = 0.0,
-                    h_tol               = 0.0,
-                    f_calls_limit       = 1000000000,
-                    time_limit          = Inf,
-                    iterations          = 50,
-                    store_convergence   = false,
-                    debug               = false,
-                    parallel_evaluation = false,
-                    verbose             = false
-                )
+@everywhere begin
+    options_dataframe = DataFrame(
+                        x_tol               = 1e-8,
+                        f_tol               = 1e-12,
+                        f_tol_rel           = eps(),
+                        f_tol_abs           = 0.0,
+                        g_tol               = 0.0,
+                        h_tol               = 0.0,
+                        f_calls_limit       = 1000000000,
+                        time_limit          = Inf,
+                        iterations          = 50,
+                        store_convergence   = false,
+                        debug               = false,
+                        parallel_evaluation = false,
+                        verbose             = false
+                    )
 
-options_dict = push_options(options_dataframe)
+    options_dict = push_options(options_dataframe)
+end
 
-@time results = run_HPO(
-                sampler_vector,
-                options_dict,
-                results_path,
-                All_Algorithm_structure,
-                problem_dataframe,
-                main_script_name, n_trials)
+    elapsed_time = @elapsed results = run_HPO(
+                                    sampler_vector,
+                                    options_dict,
+                                    results_path,
+                                    All_Algorithm_structure,
+                                    problem_dataframe,
+                                    main_script_name, n_trials)
+
+open("time_run_HPO_$(main_script_name).txt", "a") do io
+        println(io, "run_HPO elapsed time: $(round(elapsed_time, digits=2))s ($(round(elapsed_time/60, digits=2)) min)")
+end
+
 
 write_HPO_data_into_csv(results, options_dict, results_path)
 

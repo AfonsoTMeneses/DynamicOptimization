@@ -46,16 +46,16 @@
     );
 
 
-    optuna_sampler_dict = Dict(
+    optuna_sampler_dict = OrderedDict(
         "NSGAIISampler" => optuna.samplers.NSGAIISampler,
-        "CmaEsSampler" => optuna.samplers.CmaEsSampler,
-        "TPESampler" => optuna.samplers.TPESampler,
-        "RandomSampler" => optuna.samplers.RandomSampler,
-        "QMCSampler" => optuna.samplers.QMCSampler,
-        "NSGAIIISampler" => optuna.samplers.NSGAIIISampler,
-        "GPSampler" => optuna.samplers.GPSampler,
-        "BruteForceSampler" => optuna.samplers.BruteForceSampler,
-        "GridSampler" => () -> optuna.samplers.GridSampler(Algorithm_structure.Parameters_ranges)
+        #"CmaEsSampler" => optuna.samplers.CmaEsSampler,
+        #"TPESampler" => optuna.samplers.TPESampler,
+        #"RandomSampler" => optuna.samplers.RandomSampler,
+        #"QMCSampler" => optuna.samplers.QMCSampler,
+        #"NSGAIIISampler" => optuna.samplers.NSGAIIISampler,
+        #"GPSampler" => optuna.samplers.GPSampler,
+        #"BruteForceSampler" => optuna.samplers.BruteForceSampler,
+        #"GridSampler" => () -> optuna.samplers.GridSampler(Algorithm_structure.Parameters_ranges)
         )
 
     sampler_vector =  collect(keys(optuna_sampler_dict))

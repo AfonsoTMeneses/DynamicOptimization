@@ -64,12 +64,6 @@ mutable struct Algorithm
     Parameters_ranges::OrderedDict{Symbol, Any}
 end
 
-mutable struct Optimization_configuration
-    lb_instances::Int
-    hb_instance::Int
-    max_trials::Int
-end
-
 mutable struct ProblemData
     name::String
     f::Function
@@ -360,7 +354,7 @@ end
 # ─────────────────────────────────────────────
 
 function run_optimization(problem_data::ProblemData, params,
-                          Algorithm_structure, result_dir::String, options; MOEAD_WEIGHTS=nothing)
+                          Algorithm_structure, options; MOEAD_WEIGHTS=nothing)
 
     All_HV            = Float64[]
     hv_values         = Dict()
@@ -371,14 +365,6 @@ function run_optimization(problem_data::ProblemData, params,
     pop_size  = Algorithm_structure.Parameters[:N]
     max_evals = pop_size * num_ite
     options[:f_calls_limit] = 3 * max_evals
-
-    log_path = joinpath(dirname(result_dir), "log.txt")
-    open(log_path, "a") do io
-        println(io, "Optimizing problem:: $(problem_data.name)",
-                    " reference_point:: $(problem_data.reference_point)",
-                    " num_runs:: $(problem_data.num_runs)",
-                    " algorithm_instance:: $algorithm_instance")
-    end
 
     metaheuristic = set_up_algorithm(algorithm_instance, options; params, HPO=true, MOEAD_WEIGHTS)
 
@@ -402,12 +388,24 @@ function run_optimization(problem_data::ProblemData, params,
     return hv_values, All_HV, all_pareto_fronts
 end
 
-function objective(trial, sampler_func, Algorithm_structure, result_dir, problem_data::ProblemData, options)
+function objective(trial, sampler_func, Algorithm_structure, problem_data::ProblemData, main_script_name, options)
+    
     params, weights = set_configuration_optuna(trial, Algorithm_structure, sampler_func, problem_data.reference_point)
+
+    log_path = joinpath(abspath(joinpath(@__DIR__, "../..")), "log_$(main_script_name).txt")
+    open(log_path, "a") do io
+        println(io, " Optimizing problem:: $(problem_data.name)",
+                    " Sampler:: $(sampler_func)",
+                    " reference_point:: $(problem_data.reference_point)",
+                    " num_runs:: $(problem_data.num_runs)",
+                    " algorithm_instance:: $(Algorithm_structure.Name)",
+                    " HyperParameters:: $(params)")
+    end
 
     hv_value, All_HV, all_pareto_fronts = run_optimization(problem_data, params,
                                                             Algorithm_structure,
-                                                            result_dir, options; MOEAD_WEIGHTS=weights)
+                                                            options; MOEAD_WEIGHTS=weights)
+
 
     if hv_value == -Inf && All_HV == -Inf
         return -Inf
@@ -428,7 +426,7 @@ end
 # Trial runner
 # ─────────────────────────────────────────────
 
-function run_trial(sampler_instance::Int, Algorithm_structure, sampler_vector, result_dir::String, options, problem_instance, problem_dataframe, n_trials)
+function run_trial(sampler_instance::Int, Algorithm_structure, sampler_vector, results_path::String, options, problem_instance, problem_dataframe, main_script_name, n_trials)
     
     problem_name, f, searchspace, reference_point, num_runs =
         unpack_df(problem_dataframe, String(Algorithm_structure.Name), problem_instance)
@@ -454,7 +452,7 @@ function run_trial(sampler_instance::Int, Algorithm_structure, sampler_vector, r
     num_ite = options[:iterations]
 
     study.optimize(
-        trial -> objective(trial, sampler_func, Algorithm_structure, result_dir, problem_data, options),
+        trial -> objective(trial, sampler_func, Algorithm_structure, problem_data, main_script_name, options),
         n_trials = n_trials
     )
 
@@ -477,7 +475,7 @@ function run_trial(sampler_instance::Int, Algorithm_structure, sampler_vector, r
     end
 
     problem_folder_name = "Problem_$(problem_instance)_$(problem_name)"
-    problem_dir, _ = create_directories(String(Algorithm_structure.Name), num_ite, problem_folder_name, result_dir)
+    problem_dir, _ = create_directories(String(Algorithm_structure.Name), num_ite, problem_folder_name, results_path)
 
     CSV_NAME = "$(problem_name)_$(problem_instance)_$(sampler_class)_$(Algorithm_structure.Name)_obtained_solutions.csv"
     CSV.write(joinpath(problem_dir, CSV_NAME), opt_results_df)
@@ -504,21 +502,35 @@ function init_parallel_arrays(sampler_vector, problem_instances::UnitRange{Int64
     return problem_instances_array, sampler_instances_array
 end
 
-function run_HPO(sampler_vector, options, result_dir, All_Algorithm_structure, problem_dataframe, main_script_name, n_trials)
+function run_HPO(sampler_vector, options, results_path, All_Algorithm_structure, problem_dataframe, main_script_name, n_trials)
     problem_instances = 1:nrow(problem_dataframe)
     problem_instances_array, sampler_instances_array = init_parallel_arrays(sampler_vector, problem_instances)
 
-    problem_dataframe = initialize_runs_dicts(All_Algorithm_structure, main_script_name, problem_dataframe, 1, nrow(problem_dataframe))
-    println(problem_dataframe)
+    problem_dataframe = initialize_runs_dicts(All_Algorithm_structure, main_script_name,
+                                              problem_dataframe, 1, nrow(problem_dataframe))
 
-    results = @distributed (vcat) for Algorithm_structure in collect(All_Algorithm_structure)
-        println("Currently Testing : $(Algorithm_structure.Name)")
-        task = (sampler_instance, prob) -> run_trial(sampler_instance, Algorithm_structure, sampler_vector, result_dir, options, prob, problem_dataframe, n_trials)
-        pmap_results = pmap(task, sampler_instances_array, problem_instances_array)
-        [pmap_results]
+    all_tasks = [
+        (alg, s, p)
+        for alg in All_Algorithm_structure
+        for (s, p) in zip(sampler_instances_array, problem_instances_array)
+    ]
+
+    log_path = joinpath(abspath(joinpath(@__DIR__, "../..")), "log_$main_script_name.txt")
+    open(log_path, "a") do io
+        println(io, "$all_tasks")
     end
 
-    return results
+    
+    n_per_alg = length(sampler_instances_array)
+
+    results_flat = pmap(all_tasks) do (Algorithm_structure, sampler_instance, prob)
+        println("Currently Testing : $(Algorithm_structure.Name)")
+        run_trial(sampler_instance, Algorithm_structure, sampler_vector,
+                  results_path, options, prob, problem_dataframe, main_script_name, n_trials)
+    end
+
+    return [results_flat[(i-1)*n_per_alg + 1 : i*n_per_alg]
+            for i in 1:length(All_Algorithm_structure)]
 end
 
 

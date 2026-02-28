@@ -48,11 +48,9 @@ for searchspace in algorithms
 
     Algorithm_structure = detect_searchspaces(searchspace)
 
-    optuna_configuration = Optimization_configuration(1, 50, 100)
-
     num_runs = 100
 
-    for current_instance in optuna_configuration.lb_instances:optuna_configuration.hb_instance
+    for current_instance in 1:50
 
         problem_name, f, problem_bounds, reference_point = getproblem(current_instance)
 
