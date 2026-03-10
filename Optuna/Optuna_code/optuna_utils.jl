@@ -233,22 +233,24 @@ end
 # ─────────────────────────────────────────────
 
 function get_df_column_values(df::DataFrame, column::Int, array_position::Int, Alg_Name, run_dict)
-    if 1 ≤ column ≤ length(names(df))
-        column_array = []
-        for i in df[2:end, column]
-            if !ismissing(i)
-                str = String(i)
-                if !occursin("Inf", str)
-                    array = eval(Meta.parse(str))
-                    push!(column_array, array[array_position])
-                else
-                    push!(column_array, i)
-                end
-            end
-        end
-    else
-        error("Invalid column index: $column")
+    println("Reading $(Alg_Name) CSV")
+
+    if !(1 ≤ column ≤ ncol(df))
+        error("Column $column out of range — CSV only has $(ncol(df)) columns")
     end
+
+    column_array = []
+    for i in df[:, column]  
+        ismissing(i) && continue
+        str = string(i)
+        if !occursin("Inf", str)
+            array = eval(Meta.parse(str))
+            push!(column_array, array[array_position])
+        else
+            push!(column_array, i)
+        end
+    end
+
     run_dict[Alg_Name] = column_array
     return run_dict
 end
@@ -321,6 +323,7 @@ function benchmark_handler(All_Algorithm_structure, lower_bound::Int64, upper_bo
         if haskey(ref_points_offset, i)
             reference_point = ref_points_offset[i]
         end
+
         push!(problem_dataframe, (
             problems_names          = probl_name,
             problem_function        = f,
@@ -336,18 +339,19 @@ end
 function initialize_runs_dicts(All_Algorithm_structure, main_script_name, problem_dataframe::DataFrame, lower_bound::Int64, upper_bound::Int64)
     for Algorithm_structure in All_Algorithm_structure
         fname = "minimum_runs_$(main_script_name)_$(Algorithm_structure.Name).csv"
-        if isfile(fname)
-            df = CSV.read(fname, DataFrame; header=false)
-        else
-            error("$fname not found in the current folder. Please switch to the correct folder or run get_minimum_runs() to generate it.")
+        
+        if !isfile(fname)
+            error("$fname not found. Please switch to the correct folder or run get_minimum_runs().")
         end
+
+        df = CSV.read(fname, DataFrame; pool=false)
+
         runs_dicts = Dict()
         runs_dicts = get_df_column_values(df, 6, 10, Algorithm_structure.Name, runs_dicts)
         problem_dataframe[!, Algorithm_structure.Name] = runs_dicts[Algorithm_structure.Name][lower_bound:upper_bound]
     end
     return problem_dataframe
 end
-
 
 # ─────────────────────────────────────────────
 # Core optimisation
@@ -361,6 +365,7 @@ function run_optimization(problem_data::ProblemData, params,
     all_pareto_fronts = Dict()
 
     algorithm_instance = Algorithm_structure.Name
+    options = copy(options) 
     num_ite   = options[:iterations]
     pop_size  = Algorithm_structure.Parameters[:N]
     max_evals = pop_size * num_ite
@@ -374,7 +379,7 @@ function run_optimization(problem_data::ProblemData, params,
     end
 
     for i in 1:problem_data.num_runs
-        println("Starting task... run $i / $(problem_data.num_runs) for $(problem_data.name)")
+        println("Starting task... run $i / $(problem_data.num_runs) for $(problem_data.name) with $algorithm_instance")
         status = optimize(problem_data.f, problem_data.searchspace, metaheuristic)
         display(status)
         println("Task Finished...")
@@ -465,13 +470,14 @@ function run_trial(sampler_instance::Int, Algorithm_structure, sampler_vector, r
     PF_best = study.best_trial.user_attrs["PF"]
 
     opt_results_df = DataFrame(
-        algorithm_name = Symbol[],
+        problem_run = Symbol[],
+        algorithm_name = Symbol[], 
         sampler        = String[],
         solutions      = Vector{Any}[],
     )
     sampler_class = study[:sampler][:__class__][:__name__]
     for (key, PF) in PF_best
-        push!(opt_results_df, (algorithm_name=Symbol(key), sampler=sampler_class, solutions=PF))
+        push!(opt_results_df, (problem_run = Symbol(key), algorithm_name = Algorithm_structure.Name ,sampler=sampler_class, solutions=PF))
     end
 
     problem_folder_name = "Problem_$(problem_instance)_$(problem_name)"
@@ -506,16 +512,18 @@ function run_HPO(sampler_vector, options, results_path, All_Algorithm_structure,
     problem_instances = 1:nrow(problem_dataframe)
     problem_instances_array, sampler_instances_array = init_parallel_arrays(sampler_vector, problem_instances)
 
-    problem_dataframe = initialize_runs_dicts(All_Algorithm_structure, main_script_name,
-                                              problem_dataframe, 1, nrow(problem_dataframe))
-
     all_tasks = [
         (alg, s, p)
         for alg in All_Algorithm_structure
         for (s, p) in zip(sampler_instances_array, problem_instances_array)
     ]
+    
 
     log_path = joinpath(abspath(joinpath(@__DIR__, "../..")), "log_$main_script_name.txt")
+    if isfile(log_path)
+        rm(log_path)
+    end
+
     open(log_path, "a") do io
         println(io, "$all_tasks")
     end
@@ -524,9 +532,14 @@ function run_HPO(sampler_vector, options, results_path, All_Algorithm_structure,
     n_per_alg = length(sampler_instances_array)
 
     results_flat = pmap(all_tasks) do (Algorithm_structure, sampler_instance, prob)
-        println("Currently Testing : $(Algorithm_structure.Name)")
-        run_trial(sampler_instance, Algorithm_structure, sampler_vector,
-                  results_path, options, prob, problem_dataframe, main_script_name, n_trials)
+        try
+            println("Currently Testing : $(Algorithm_structure.Name)")
+            run_trial(sampler_instance, Algorithm_structure, sampler_vector,
+                    results_path, options, prob, problem_dataframe, main_script_name, n_trials)
+        catch e
+            @warn "Task failed for $(Algorithm_structure.Name), prob=$prob: $e"
+            nothing 
+        end
     end
 
     return [results_flat[(i-1)*n_per_alg + 1 : i*n_per_alg]
@@ -580,10 +593,7 @@ function write_HPO_data_into_csv(results, options_dict, results_path)
                 csv_path = joinpath(iter_dir, CSV_NAME)
                 
                 write_header = !isfile(csv_path)
-                
-                if occursin(String(r.sampler), CSV_NAME)
-                    CSV.write(csv_path, result_df, append=true, writeheader=write_header)
-                end
+                CSV.write(csv_path, result_df, append=true, writeheader=write_header)
             end
         end
     end

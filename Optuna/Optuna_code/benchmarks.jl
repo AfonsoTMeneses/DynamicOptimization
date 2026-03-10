@@ -1,4 +1,3 @@
-
 using Distributed
 addprocs(4)
 
@@ -16,7 +15,6 @@ addprocs(4)
     using Statistics
     using JSON
     using PyCall
-    using Distributed
     optuna = pyimport("optuna")
     include(joinpath(@__DIR__, "Hyperoptimization_intervals.jl"))
     include(joinpath(@__DIR__, "optuna_utils.jl"))
@@ -29,24 +27,27 @@ end
     cd(results_path)
 end
 
+for alg in algorithms
+    
+    suffix = split(alg, "_searchspace")[1]   
+    remove_existing_csv(joinpath(results_path, suffix))
+    
+end
 
 
 @everywhere begin
     n_trials = 100
     All_Algorithm_structure = initialize_algorithm_structures(algorithms)
 end
-
-    ###########
-    ########### HPO
-    ###########
+ 
 @everywhere begin
     lb_instaces = 1
     hb_instaces = 50
     problem_dataframe = DataFrame()
     problem_dataframe = benchmark_handler(All_Algorithm_structure, lb_instaces, hb_instaces, main_script_name)
     results = []
-
 end
+
 
 
 @everywhere begin
@@ -67,24 +68,31 @@ end
                     verbose = false
                 )
 
-
-
     options_dict = push_options(options_dataframe)
+
 end
 
-    elapsed_time = @elapsed results = run_HPO(sampler_vector, options_dict, results_path, All_Algorithm_structure, problem_dataframe, main_script_name, n_trials)
-    # pmap -- 25.687724 seconds (2.98 M allocations: 203.145 MiB, 0.33% gc time, 8.33% compilation time: 4% of which was recompilation)
-    # map -- 38.523086 seconds (38.27 M allocations: 14.290 GiB, 5.12% gc time, 25.31% compilation time: 18% of which was recompilation)
-    open("time_run_HPO_$(main_script_name).txt", "a") do io
-        println(io, "run_HPO elapsed time: $(round(elapsed_time, digits=2))s ($(round(elapsed_time/60, digits=2)) min)")
-    end
+
+problem_instances = 1:nrow(problem_dataframe)
+problem_instances_array, sampler_instances_array = init_parallel_arrays(sampler_vector, problem_instances)
+
+    all_tasks = [
+        (alg, s, p)
+        for alg in All_Algorithm_structure
+        for (s, p) in zip(sampler_instances_array, problem_instances_array)
+    ]
+    
 
 
-   
-    #println("Summary of best trials:")
 
+elapsed_time = @elapsed results = run_HPO(sampler_vector, options_dict, results_path, All_Algorithm_structure, problem_dataframe, main_script_name, n_trials)
+open("time_run_HPO_$(main_script_name).txt", "a") do io
+    println(io, "run_HPO elapsed time: $(round(elapsed_time, digits=2))s ($(round(elapsed_time/60, digits=2)) min)")
+end
 
 write_HPO_data_into_csv(results, options_dict, results_path)
+
+
 
 #=
 a = 1:4

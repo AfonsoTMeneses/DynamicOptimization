@@ -121,7 +121,6 @@ function get_minimum_runs(results::Dict, problem_name::String, CSV_RUNS_FILE_NAM
     All_HV_df = DataFrame(All_HV = [JSON.json(typed_results)])
     CSV.write(CSV_RUNS_FILE_NAME, All_HV_df; append=true, writeheader=false)
 
-
     separator_df = DataFrame(
         problem_name           = [""],
         best_HV                = [missing],
