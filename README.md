@@ -19,6 +19,10 @@ julia --project=. setup.jl
 
 ## Workflow
 
+baseline_benchmark.jl  →  hpo_benchmark.jl  →  compute_cPF.jl  →  analysis.py
+baseline_truss.jl      →  hpo_truss.jl      →  compute_cPF.jl  →  analysis.py
+
+
 ### Phase 1 — Baseline
 
 Each algorithm runs with default parameters, 100 times per problem. Produces empirical bounds (ideal/nadir), reference fronts (for IGD+), and minimum runs (95% CI).
