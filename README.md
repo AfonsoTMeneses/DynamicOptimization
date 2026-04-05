@@ -20,6 +20,7 @@ julia --project=. setup.jl
 ## Workflow
 
 baseline_benchmark.jl  →  hpo_benchmark.jl  →  compute_cPF.jl  →  analysis.py
+
 baseline_truss.jl      →  hpo_truss.jl      →  compute_cPF.jl  →  analysis.py
 
 
