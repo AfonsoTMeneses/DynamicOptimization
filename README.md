@@ -4,38 +4,6 @@ Hyperparameter optimization for multi-objective metaheuristic algorithms, benchm
 
 MSc Thesis — Instituto Superior Técnico, Universidade de Lisboa.
 
-## Project Structure
-
-```
-Optuna/
-├── Project.toml                        # Julia project (dependencies)
-├── setup.jl                            # Run once: installs all packages
-├── Optuna_code/
-│   ├── optuna_utils.jl                 # Core: normalization, HV, IGD+, HPO pipeline, CSV I/O
-│   ├── utils_minimum_runs.jl           # Min runs computation (CI formula)
-│   ├── Hyperoptimization_intervals.jl  # Search spaces, sampler list (user config)
-│   ├── truss_problem.jl               # Parametric truss: geometry, objectives, variables
-│   │
-│   ├── baseline_benchmark.jl           # Phase 1: 50 problems × 4 algs × 100 runs (defaults)
-│   ├── hpo_benchmark.jl               # Phase 2: HPO on 50 problems (Optuna)
-│   ├── baseline_truss.jl              # Phase 1: truss × 4 algs × 100 runs (defaults)
-│   ├── hpo_truss.jl                   # Phase 4: HPO on truss (3 samplers, SQLite)
-│   └── analysis.py                    # Phase 5: figures, LaTeX tables, stats
-│
-├── Results/
-│   ├── minimum_runs_baseline_benchmark_*.csv
-│   ├── empirical_bounds_baseline_benchmark_*.csv
-│   ├── reference_fronts_baseline_benchmark_*.csv
-│   ├── hpo_benchmark_Results/
-│   ├── baseline_truss_Results/
-│   └── hpo_truss_Results/
-│
-├── rename_csvs.sh                      # One-time: rename old CSV files
-├── CHANGES.md                          # Detailed changelog
-├── TODO.md                             # Step-by-step next actions
-└── README.md                           # This file
-```
-
 ## Prerequisites
 
 - **Julia** >= 1.9
@@ -47,12 +15,6 @@ Optuna/
 ```bash
 cd Optuna/
 julia --project=. setup.jl
-```
-
-If migrating from old script names:
-```bash
-cd Results/
-bash ../rename_csvs.sh
 ```
 
 ## Workflow
@@ -68,7 +30,7 @@ julia --project=.. Optuna_code/baseline_truss.jl        # truss
 
 ### Phase 2 — HPO (benchmarks)
 
-Optuna trials with multiple samplers. Each trial proposes hyperparameters, runs the optimizer num_runs times, computes normalized HV and IGD+. Tracks convergence, timing, param importance (fANOVA), and Pareto fronts.
+Optuna trials with multiple samplers. Each trial proposes hyperparameters, runs the optimizer num_runs times, computes normalized HV and IGD+.
 
 ```bash
 julia --project=.. Optuna_code/hpo_benchmark.jl
@@ -84,7 +46,7 @@ python3 Optuna_code/analysis.py --results-dir ./Results --output-dir ./thesis_fi
 
 ### Phase 4 — HPO (truss)
 
-Apply selected samplers to the truss with 50 iterations. Includes SQLite persistence and Pareto front collection.
+Apply selected samplers to the truss with 50 iterations.
 
 ```bash
 julia --project=.. Optuna_code/hpo_truss.jl
@@ -92,7 +54,7 @@ julia --project=.. Optuna_code/hpo_truss.jl
 
 ### Phase 5 — Analysis
 
-Re-run analysis with full data. Generates all thesis deliverables.
+Re-run analysis with full data.
 
 ```bash
 python3 Optuna_code/analysis.py --results-dir ./Results --output-dir ./thesis_figures
@@ -117,30 +79,12 @@ Both indicators use the same normalization frame: empirical ideal/nadir from Pha
 
 ## Normalization Method
 
-Following Mejía de Dios (personal communication):
-
 1. Union all feasible ND solutions across 100 baseline runs
 2. Empirical ideal = componentwise min, nadir = componentwise max
 3. Normalize: `f' = (f - ideal) / (nadir - ideal)`
 4. Reference point: R = 1.01 × ones(n_objectives)
 
 For DEAD problems (no feasible solutions with defaults): HPO uses library nadir + empirical ideal from the trial's own solutions.
-
-## Analysis Outputs
-
-| Output | Description |
-|--------|-------------|
-| `baseline_summary.csv` | Mean HV, std, min_runs, feasibility per problem × algorithm |
-| `baseline_hv_boxplot.pdf` | Box plot of HV distributions |
-| `feasibility_heatmap.pdf` | Feasibility rate heatmap |
-| `comparison_table.tex` | LaTeX: ΔHV, IGD+, timing, significance counts |
-| `win_tie_loss_table.tex` | LaTeX: Mann-Whitney U win/tie/loss |
-| `param_importance_table.tex` | LaTeX: fANOVA importance per param |
-| `computational_cost_table.tex` | LaTeX: wall time per study |
-| `hpo_improvement_barchart.pdf` | ΔHV grouped by sampler |
-| `convergence_*.pdf` | Sampler convergence curves |
-| `pareto_front_*.pdf` | Solutions in objective space |
-| `param_importance_*.pdf` | Importance bar charts per algorithm |
 
 ## Optuna Dashboard (truss only)
 
