@@ -6,11 +6,10 @@ using DataFrames
 using CSV
 using Statistics
 using JSON
+using Logging
 
 
-# ─────────────────────────────────────────────
 # CSV helpers
-# ─────────────────────────────────────────────
 
 function check_CSV(searchspace::String, name_of_script::String, results_path::String)
     println("Currently using $searchspace")
@@ -34,20 +33,16 @@ function remove_existing_csv(filepath::String)
 end
 
 
-# ─────────────────────────────────────────────
 # Minimum runs formula
-# ─────────────────────────────────────────────
 
 # Given a z-score, standard deviation, and margin of error ϵ,
 # returns the minimum number of runs needed.
 minimum_runs(z, stdev, ϵ) = ceil((z * stdev / ϵ)^2)
 
 
-# ─────────────────────────────────────────────
 # Core: compute and write minimum runs
-# ─────────────────────────────────────────────
 
-function get_minimum_runs(results::Dict, problem_name::String, CSV_RUNS_FILE_NAME::String)
+function get_minimum_runs(results::Dict, problem_name::String, CSV_RUNS_FILE_NAME::String, current_instance::Int)
 
     typed_results = results[:Hypervolumes]
     println(typed_results)
@@ -98,17 +93,16 @@ function get_minimum_runs(results::Dict, problem_name::String, CSV_RUNS_FILE_NAM
         println("  $(level)% CI: $(runs_dict[level])")
     end
 
-    # ── Stats summary ──────────────────────────────
     println("min:  $(minimum(typed_results))")
     println("max:  $(maximum(typed_results))")
     println("std:  $(all_std)")
     println("mean: $(mean_hv)")
 
-    # ── Write stats row ────────────────────────────
     stats_df = DataFrame(
         problem_name           = problem_name,
         best_HV                = maximum(typed_results),
         error                  = last_error / mean_hv,
+        current_instance       = current_instance,
         confidence_interval_90 = [JSON.json(runs_dict[90])],
         confidence_interval_95 = [JSON.json(runs_dict[95])],
         confidence_interval_98 = [JSON.json(runs_dict[98])],
@@ -125,6 +119,7 @@ function get_minimum_runs(results::Dict, problem_name::String, CSV_RUNS_FILE_NAM
         problem_name           = [""],
         best_HV                = [missing],
         error                  = [missing],
+        current_instance       = [missing],
         confidence_interval_90 = [""],
         confidence_interval_95 = [""],
         confidence_interval_98 = [""],
@@ -132,6 +127,10 @@ function get_minimum_runs(results::Dict, problem_name::String, CSV_RUNS_FILE_NAM
     )
     CSV.write(CSV_RUNS_FILE_NAME, separator_df; append=true, writeheader=false)
 
+end
+
+function get_minimum_runs(results::Dict, problem_name::String, CSV_RUNS_FILE_NAME::String)
+    get_minimum_runs(results, problem_name, CSV_RUNS_FILE_NAME, 0)
 end
 
 
@@ -144,26 +143,57 @@ function get_minimum_runs_parametric_truss(alg, problem_dataframe, options_dict,
 
     Algorithm_structure = detect_searchspaces(alg)
 
-    pop_size     = Algorithm_structure.Parameters[:N]
+    nobj = length(problem_ref_point)
+    if Algorithm_structure.Name == :MOEAD_DE
+        moead_weights = set_up_weights_MOEAD_DE(nobj)
+        pop_size = length(moead_weights)
+    else
+        moead_weights = nothing
+        pop_size = Algorithm_structure.Parameters[:N]
+    end
     n_iterations = options_dict[:iterations]
     max_evals    = pop_size * n_iterations
 
     algorithm_instance = Algorithm_structure.Name
-    println("Using algorithm: $algorithm_instance")
+    println("Using algorithm: $algorithm_instance (nobjectives=$nobj, pop_size=$pop_size)")
     options_dict[:f_calls_limit] = 3 * max_evals
 
-    All_HV = Dict(:Hypervolumes => Float64[])
+    # PASS 1: Collect feasible non-dominated fronts per run
+    all_run_fronts = Vector{Vector{Vector{Float64}}}()
 
     @time for i in 1:num_runs
-        metaheuristic = set_up_algorithm(algorithm_instance, options_dict)
+        metaheuristic = set_up_algorithm(algorithm_instance, options_dict; nobjectives=nobj, MOEAD_WEIGHTS=moead_weights)
 
         println("Starting task... iteration: $i")
-        status = optimize(problem_function, problem_bounds, metaheuristic)
-        display(status)
+        status = with_logger(SimpleLogger(stderr, Logging.Error)) do
+            optimize(problem_function, problem_bounds, metaheuristic)
+        end
         println("Task Finished... iteration: $i")
-        approx_front = get_non_dominated_solutions(status.population)
-        HV = hypervolume(approx_front, problem_ref_point)
-        push!(All_HV[:Hypervolumes], HV)
+        front = get_feasible_non_dominated(status.population)
+        status = nothing
+        push!(all_run_fronts, front)
+    end
+
+    # Compute empirical bounds from the union of all fronts
+    ideal, nadir = compute_empirical_bounds(all_run_fronts)
+
+    if isnothing(ideal) || isnothing(nadir)
+        @warn "Parametric truss: no feasible solutions found. HV will be 0."
+        All_HV = Dict(:Hypervolumes => fill(0.0, num_runs))
+    else
+        println("  Empirical ideal: $ideal")
+        println("  Empirical nadir: $nadir")
+
+        # Save bounds for later use
+        bounds_csv = joinpath(results_path, "empirical_bounds_$(main_script_name)_$(Algorithm_structure.Name).csv")
+        save_empirical_bounds(bounds_csv, problem_name, 1, ideal, nadir)
+
+        # PASS 2: Compute normalized HV for each run
+        All_HV = Dict(:Hypervolumes => Float64[])
+        for front in all_run_fronts
+            hv = normalized_hypervolume(front, ideal, nadir)
+            push!(All_HV[:Hypervolumes], hv)
+        end
     end
 
     cd(results_path)
@@ -172,6 +202,6 @@ function get_minimum_runs_parametric_truss(alg, problem_dataframe, options_dict,
     println("Results::$All_HV")
     println("Mean Hypervolume ($n_iterations iterations): $hv_mean")
 
-    get_minimum_runs(All_HV, problem_name, CSV_RUNS_FILE_NAME)
+    get_minimum_runs(All_HV, problem_name, CSV_RUNS_FILE_NAME, 1)
 
 end
