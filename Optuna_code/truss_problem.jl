@@ -1,19 +1,3 @@
-# Parametric Truss Problem Definition
-# 
-# This file defines the truss geometry, materials, objectives,
-# and search space. It contains NO @everywhere wrappers — the
-# caller is responsible for loading on workers if needed:
-#
-#   Single-process:  include("truss_problem.jl")
-#   Multi-process:   @everywhere include("truss_problem.jl")
-#
-# Prerequisites (must be loaded BEFORE including this file):
-#   using KhepriFrame3DD
-#   using Metaheuristics  (for BoxConstrainedSpace)
-
-
-# Truss Geometry ---------------------------------------------------------------
-
 my_free_truss_node_family = truss_node_family_element(default_truss_node_family(), support=false)
 free_node(pt) = truss_node(pt, family=my_free_truss_node_family)
 fixed_node(pt) = truss_node(pt, family=fixed_truss_node_family)
@@ -45,7 +29,7 @@ space_frame(ptss) =
         end
     end
 
-parametric_truss(x11, y11, z11, x12, y12, z12, x13, y13, z13, x21, y21, z21, x22, y22, z22, x31, y31, z31, x32, y32, z32, x33, y33, z33, x41, y41, z41, x42, y42, z42, x51, y51, z51, x52, y52, z52, x53, y53, z53) =
+parametric_truss(x11, y11, z11, x12, y12, z12, x13, y13, z13, x21, y21, z21, x22, y22, z22, x31, y31, z31, x32, y32, z32, x41, y41, z41, x42, y42, z42, x51, y51, z51, x52, y52, z52, x53, y53, z53) =
     let p11 = xyz(x11, y11, z11),
         p12 = xyz(x12, y12, z12),
         p13 = xyz(x13, y13, z13),
@@ -85,36 +69,33 @@ fixed_parametric_truss(
             0, 20, 0, x52, y52, z52, 20, 20, 0)
     end
 
+# Helpers
 
-# Truss Analysis and Optimization ----------------------------------------------
-
-## Helper Functions
-step_size = 0.01    
+const step_size = 0.01
 int2float(x, min, step = step_size) = min + step * x
 bounds_coordinates(v, r=0.3) = (v - r, v + r) .* 10
 
-## Materials Young's Modulus and Cost
-materials_e = [
-    1.6409e11, # Cast Iron ASTM A536
-    1.86e11,   # Steel, stainless AISI 302
-    2.e11,     # Carbon Steel, Structural ASTM A516
-    2.0684e11, # Alloy Steel, ASTM A242
-    2.047e11,  # Alloy Steel, AISI 4140
-    1.93e11,   # Stainless Steel AISI 201
+# Materials
+
+const materials_e = [
+    1.6409e11,
+    1.86e11,
+    2.e11,
+    2.0684e11,
+    2.047e11,
+    1.93e11,
 ]
 
-materials_cost = [
-    460.0,     # Cast Iron ASTM A536
-    1480.0,    # Steel, stainless AISI 302
-    860.0,     # Carbon Steel, Structural ASTM A516
-    950.0,     # Alloy Steel, ASTM A242
-    2750.0,    # Alloy Steel, AISI 4140
-    1825.0,    # Stainless Steel AISI 201
+const materials_cost = [
+    460.0,
+    1480.0,
+    860.0,
+    950.0,
+    2750.0,
+    1825.0,
 ]
 
-## Objectives
-# (1) minimizing the maximum displacement
-# (2) minimizing the material cost of the truss structure
+# Variable bounds
 
 r = 0.4
 x12_interval = bounds_coordinates(1, r)
@@ -139,7 +120,9 @@ x52_interval = bounds_coordinates(1, r)
 y52_interval = bounds_coordinates(2, r)
 z52_interval = bounds_coordinates(0, r)
 
-n_objs = 2
+const n_objs = 2
+
+# Objectives
 
 cost(truss_volume, material) = truss_volume * materials_cost[Int(material)]
 
@@ -200,34 +183,35 @@ function problem(x)
     end
 end
 
-## Variables
-n_vars = 23
-material_idx = 1:6
-bar_radius = 0:8  # min=0.035, max=0.075, step=0.005
+# Search space
 
-upper_bound(interval, step_size = step_size) = Int((interval[end] - interval[1])/step_size)
+const n_vars = 23
+material_idx = 1:6
+bar_radius = 0:8
+
+upper_bound(interval, step_size = step_size) = Int((interval[end] - interval[1]) / step_size)
 
 x12_upper_bound = upper_bound(x12_interval)
-y12_upper_bound = upper_bound(y12_interval) 
+y12_upper_bound = upper_bound(y12_interval)
 z12_upper_bound = upper_bound(z12_interval)
 x21_upper_bound = upper_bound(x21_interval)
 y21_upper_bound = upper_bound(y21_interval)
 z21_upper_bound = upper_bound(z21_interval)
-x22_upper_bound = upper_bound(x22_interval) 
-y22_upper_bound = upper_bound(y22_interval) 
-z22_upper_bound = upper_bound(z22_interval) 
-x32_upper_bound = upper_bound(x32_interval) 
-y32_upper_bound = upper_bound(y32_interval) 
-z32_upper_bound = upper_bound(z32_interval) 
-x41_upper_bound = upper_bound(x41_interval) 
-y41_upper_bound = upper_bound(y41_interval) 
-z41_upper_bound = upper_bound(z41_interval) 
-x42_upper_bound = upper_bound(x42_interval) 
-y42_upper_bound = upper_bound(y42_interval) 
-z42_upper_bound = upper_bound(z42_interval) 
-x52_upper_bound = upper_bound(x52_interval) 
-y52_upper_bound = upper_bound(y52_interval) 
-z52_upper_bound = upper_bound(z52_interval) 
+x22_upper_bound = upper_bound(x22_interval)
+y22_upper_bound = upper_bound(y22_interval)
+z22_upper_bound = upper_bound(z22_interval)
+x32_upper_bound = upper_bound(x32_interval)
+y32_upper_bound = upper_bound(y32_interval)
+z32_upper_bound = upper_bound(z32_interval)
+x41_upper_bound = upper_bound(x41_interval)
+y41_upper_bound = upper_bound(y41_interval)
+z41_upper_bound = upper_bound(z41_interval)
+x42_upper_bound = upper_bound(x42_interval)
+y42_upper_bound = upper_bound(y42_interval)
+z42_upper_bound = upper_bound(z42_interval)
+x52_upper_bound = upper_bound(x52_interval)
+y52_upper_bound = upper_bound(y52_interval)
+z52_upper_bound = upper_bound(z52_interval)
 
 lb_points = [material_idx[1], bar_radius[1], fill(0, 21)...]
 ub_points = [material_idx[end], bar_radius[end],

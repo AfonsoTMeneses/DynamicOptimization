@@ -13,50 +13,42 @@ include(joinpath(@__DIR__, "optuna_utils.jl"))
 include(joinpath(@__DIR__, "truss_problem.jl"))
 include(joinpath(@__DIR__, "utils_minimum_runs.jl"))
 
-algorithms = ["MOEAD_DE_searchspace","NSGA2_searchspace", "SPEA2_searchspace", "SMS_EMOA_searchspace"] #
+algorithms = ["MOEAD_DE_searchspace","NSGA2_searchspace", "SPEA2_searchspace", "SMS_EMOA_searchspace"]
 main_script_name = String(split(basename(abspath(@__FILE__)), ".jl")[1])
-results_path = normpath(dirname(@__DIR__),"Results/$(main_script_name)_Results")
+results_path = normpath(dirname(@__DIR__), "Results/$(main_script_name)_Results")
 mkpath(results_path)
 cd(results_path)
 
-
 All_Algorithm_structure = initialize_algorithm_structures(algorithms)
-
 delete_file("$(main_script_name).csv", results_path)
 
-    
-reference_point = [10, 4000] # This is used as a placeholder
-
 problem_dataframe = DataFrame(
-            problems_names = "parametric_truss",
-            problem_function = problem,
-            problem_bounds = integer_space,
-            problem_ref_point = [reference_point],
+    problems_names    = "parametric_truss",
+    problem_function  = problem,
+    problem_bounds    = integer_space,
+    problem_ref_point = [fill(0.0, n_objs)],
 )
 
-
 options_dataframe = DataFrame(
-                    x_tol = 1e-8,
-                    f_tol = 1e-12,
-                    f_tol_rel = eps(),
-                    f_tol_abs = 0.0,
-                    g_tol = 0.0,
-                    h_tol = 0.0,
-                    f_calls_limit = 1000000000,
-                    time_limit = Inf,
-                    iterations = 50,
-                    store_convergence = false,
-                    debug = false,
-                    parallel_evaluation = false,
-                    verbose = false
-                )
-
+    x_tol               = 1e-8,
+    f_tol               = 1e-12,
+    f_tol_rel           = eps(),
+    f_tol_abs           = 0.0,
+    g_tol               = 0.0,
+    h_tol               = 0.0,
+    f_calls_limit       = 1000000000,
+    time_limit          = Inf,
+    iterations          = 50,
+    store_convergence   = false,
+    debug               = false,
+    parallel_evaluation = false,
+    verbose             = false,
+)
 options_dict = push_options(options_dataframe)
 
 num_runs = 100
 results_dict = Dict()
-
-nobj = length(reference_point)
+nobj = n_objs
 
 for alg in algorithms
     Algorithm_structure = detect_searchspaces(alg)
@@ -75,7 +67,6 @@ for alg in algorithms
 
     println("Using algorithm: $algorithm_instance (nobjectives=$nobj, pop_size=$pop_size)")
 
-    # pass 1 — collect fronts
     all_run_fronts = Vector{Vector{Vector{Float64}}}()
 
     @time for i in 1:num_runs
@@ -93,17 +84,16 @@ for alg in algorithms
         GC.gc(true)
     end
 
-
     ideal, nadir = compute_empirical_bounds(all_run_fronts)
 
     bounds_csv = joinpath(results_path, "empirical_bounds_$(main_script_name)_$(Algorithm_structure.Name).csv")
-    if isfile(bounds_csv); rm(bounds_csv); end
+    isfile(bounds_csv) && rm(bounds_csv)
 
     ref_front_csv = joinpath(results_path, "reference_fronts_$(main_script_name)_$(Algorithm_structure.Name).csv")
-    if isfile(ref_front_csv); rm(ref_front_csv); end
+    isfile(ref_front_csv) && rm(ref_front_csv)
 
     CSV_RUNS_FILE_NAME = joinpath(results_path, "minimum_runs_$(main_script_name)_$(Algorithm_structure.Name).csv")
-    if isfile(CSV_RUNS_FILE_NAME); rm(CSV_RUNS_FILE_NAME); end
+    isfile(CSV_RUNS_FILE_NAME) && rm(CSV_RUNS_FILE_NAME)
 
     HV = Float64[]
     if isnothing(ideal) || isnothing(nadir)
@@ -114,11 +104,9 @@ for alg in algorithms
         println("  Empirical nadir: $nadir")
         save_empirical_bounds(bounds_csv, "parametric_truss", 1, ideal, nadir)
 
-        # save union front for compute_cPF.jl
         union_front = reduce(vcat, filter(!isempty, all_run_fronts))
         save_reference_front(ref_front_csv, 1, union_front)
 
-        # pass 2 — HV
         for front in all_run_fronts
             push!(HV, normalized_hypervolume(front, ideal, nadir))
         end
@@ -138,16 +126,15 @@ for alg in algorithms
 end
 
 result_df = DataFrame(
-            algorithm_name = Symbol[],
-            problem_name = String[],
-            hv_value = Vector[],
-        )
+    algorithm_name = Symbol[],
+    problem_name   = String[],
+    hv_value       = Vector[],
+)
 
 folder_name = "$(main_script_name).csv"
-
 for val in keys(results_dict)
     push!(result_df, (val, "parametric_truss", results_dict[val]))
 end
 
 write_header = !isfile(folder_name)
-CSV.write(folder_name, result_df, append = true, writeheader = write_header)
+CSV.write(folder_name, result_df, append=true, writeheader=write_header)

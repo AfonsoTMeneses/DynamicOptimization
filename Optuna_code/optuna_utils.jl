@@ -7,11 +7,21 @@ using HardTestProblems
 using DataFrames
 using Logging
 
+# Module constants
+
+const NORMALIZED_REFERENCE_MARGIN = 0.01
+const MOEAD_DE_INTERNAL_FIELDS = Set([:nobjectives, :N, :λ, :T, :n_r, :z, :B, :τ])
+const DEFAULT_MOEAD_NPARTITIONS = 50
+const MAX_MOEAD_POPULATION = 500
+const RUNS_CI_COLUMN = "confidence_interval_95"
+const RUNS_CI_POSITION = 10
+const FALLBACK_RUNS = 30
+
+# Feasibility and HV
 
 function filter_feasible(population)
     return filter(is_feasible, population)
 end
-
 
 function get_feasible_non_dominated(population)
     feasible = filter_feasible(population)
@@ -19,9 +29,6 @@ function get_feasible_non_dominated(population)
     nd = get_non_dominated_solutions(feasible)
     return [Vector{Float64}(sol.f) for sol in nd]
 end
-
-
-# Empirical normalization
 
 function compute_empirical_bounds(all_fronts::Vector{Vector{Vector{Float64}}})
     union_objectives = reduce(vcat, all_fronts; init=Vector{Float64}[])
@@ -36,22 +43,19 @@ function normalize_objectives(f::Vector{Float64}, ideal::Vector{Float64}, nadir:
     return [(f[j] - ideal[j]) / max(nadir[j] - ideal[j], 1e-12) for j in eachindex(f)]
 end
 
-const NORMALIZED_REFERENCE_MARGIN = 0.01
-
 function normalized_hypervolume(front::Vector{Vector{Float64}},
                                 ideal::Vector{Float64},
                                 nadir::Vector{Float64};
                                 margin::Float64=NORMALIZED_REFERENCE_MARGIN)
     isempty(front) && return 0.0
     nobj = length(ideal)
-
     norm_front = [normalize_objectives(sol, ideal, nadir) for sol in front]
-
     pop = [Metaheuristics.create_child(zeros(1), (nf, Float64[], Float64[])) for nf in norm_front]
-
     R = fill(1.0 + margin, nobj)
     return hypervolume(pop, R)
 end
+
+# Empirical bounds IO
 
 function save_empirical_bounds(filepath::String, problem_name::String,
                                instance::Int, ideal::Vector{Float64}, nadir::Vector{Float64})
@@ -59,7 +63,7 @@ function save_empirical_bounds(filepath::String, problem_name::String,
         problem_name = [problem_name],
         current_instance = [instance],
         ideal_point = [JSON.json(ideal)],
-        nadir_point = [JSON.json(nadir)]
+        nadir_point = [JSON.json(nadir)],
     )
     write_header = !isfile(filepath)
     CSV.write(filepath, df, append=true, writeheader=write_header)
@@ -69,10 +73,8 @@ function load_empirical_bounds(filepath::String)
     if !isfile(filepath)
         error("Empirical bounds file not found: $filepath. Run baseline_benchmark.jl first.")
     end
-
     df = CSV.read(filepath, DataFrame; pool=false)
     bounds = Dict{Int, Tuple{Vector{Float64}, Vector{Float64}}}()
-
     for row in eachrow(df)
         ismissing(row.current_instance) && continue
         inst = Int(row.current_instance)
@@ -83,13 +85,33 @@ function load_empirical_bounds(filepath::String)
     return bounds
 end
 
+function load_merged_empirical_bounds(bounds_dir::String, baseline_name::String;
+                                       algorithms=["NSGA2", "SPEA2", "SMS_EMOA", "MOEAD_DE"])
+    merged = Dict{Int, Tuple{Vector{Float64}, Vector{Float64}}}()
+    for algorithm in algorithms
+        bounds_csv = joinpath(bounds_dir, "empirical_bounds_$(baseline_name)_$(algorithm).csv")
+        isfile(bounds_csv) || (@warn "Bounds file not found: $bounds_csv"; continue)
+        for (inst, (ideal, nadir)) in load_empirical_bounds(bounds_csv)
+            if haskey(merged, inst)
+                existing_ideal, existing_nadir = merged[inst]
+                merged[inst] = (
+                    [min(existing_ideal[i], ideal[i]) for i in eachindex(ideal)],
+                    [max(existing_nadir[i], nadir[i]) for i in eachindex(nadir)],
+                )
+            else
+                merged[inst] = (ideal, nadir)
+            end
+        end
+        println("Loaded empirical bounds from $bounds_csv")
+    end
+    return merged
+end
 
-# Reference front handlers
+# Reference fronts IO
 
 function save_reference_front(filepath::String, instance::Int, front::Vector{Vector{Float64}})
     isempty(front) && return
     nobj = length(first(front))
-
     rows = []
     for sol in front
         row = Dict{String, Any}("current_instance" => instance)
@@ -98,13 +120,39 @@ function save_reference_front(filepath::String, instance::Int, front::Vector{Vec
         end
         push!(rows, row)
     end
-
     df = DataFrame(rows)
     col_order = vcat(["current_instance"], ["obj_$j" for j in 1:nobj])
     df = df[:, col_order]
-
     write_header = !isfile(filepath)
     CSV.write(filepath, df; append=true, writeheader=write_header)
+end
+
+function load_reference_fronts(filepath::String)
+    if !isfile(filepath)
+        error("Reference front file not found: $filepath. Run baseline_benchmark.jl first.")
+    end
+    df = CSV.read(filepath, DataFrame; pool=false, silencewarnings=true)
+    fronts = Dict{Int, Vector{Vector{Float64}}}()
+    obj_col_pattern = r"^(obj_\d+|Column\d+)$"
+    obj_cols = [c for c in names(df) if occursin(obj_col_pattern, String(c))]
+    for row in eachrow(df)
+        ismissing(row.current_instance) && continue
+        inst = Int(row.current_instance)
+        sol = Float64[row[c] for c in obj_cols if !ismissing(row[c])]
+        isempty(sol) && continue
+        if !haskey(fronts, inst)
+            fronts[inst] = Vector{Float64}[]
+        end
+        push!(fronts[inst], sol)
+    end
+    return fronts
+end
+
+# Per-worker shard storage
+
+function _per_worker_path(filepath::String)
+    base, ext = splitext(filepath)
+    return string(base, "_w", myid(), ext)
 end
 
 function save_trial_fronts(filepath::String, fronts::Vector{Vector{Vector{Float64}}},
@@ -137,55 +185,105 @@ function save_trial_fronts(filepath::String, fronts::Vector{Vector{Vector{Float6
                      ["obj_$j" for j in 1:nobj])
     df = df[:, col_order]
 
-    write_header = !isfile(filepath)
-    CSV.write(filepath, df; append=true, writeheader=write_header)
+    worker_path = _per_worker_path(filepath)
+    write_header = !isfile(worker_path)
+    CSV.write(worker_path, df; append=true, writeheader=write_header)
 end
 
-
-function load_reference_fronts(filepath::String)
-    if !isfile(filepath)
-        error("Reference front file not found: $filepath. Run baseline_benchmark.jl first.")
-    end
-
-    df = CSV.read(filepath, DataFrame; pool=false)
-    fronts = Dict{Int, Vector{Vector{Float64}}}()
-
-    obj_cols = [c for c in names(df) if startswith(c, "obj_")]
-    nobj = length(obj_cols)
-
-    for row in eachrow(df)
-        ismissing(row.current_instance) && continue
-        inst = Int(row.current_instance)
-        sol = [Float64(row[col]) for col in obj_cols]
-        if !haskey(fronts, inst)
-            fronts[inst] = Vector{Float64}[]
+function merge_worker_fronts(root_dir::String)
+    isdir(root_dir) || return
+    groups = Dict{String, Vector{String}}()
+    for (root, _, files) in walkdir(root_dir)
+        for fn in files
+            startswith(fn, "all_fronts_") || continue
+            m = match(r"^(all_fronts_.+)_w\d+\.csv$", fn)
+            isnothing(m) && continue
+            canonical = joinpath(root, m.captures[1] * ".csv")
+            push!(get!(groups, canonical, String[]), joinpath(root, fn))
         end
-        push!(fronts[inst], sol)
     end
-    return fronts
+
+    for (canonical, shards) in groups
+        sort!(shards)
+        try
+            open(canonical, "w") do out
+                first = true
+                for shard in shards
+                    open(shard, "r") do inp
+                        for (i, line) in enumerate(eachline(inp))
+                            if i == 1
+                                first || continue
+                            end
+                            println(out, line)
+                        end
+                    end
+                    first = false
+                end
+            end
+            for shard in shards
+                rm(shard)
+            end
+            println("  merged $(length(shards)) shards -> $canonical")
+        catch e
+            @warn "Failed to merge shards into $canonical: $e"
+        end
+    end
 end
 
+function merge_result_shards(root_dir::String)
+    isdir(root_dir) || return
+    groups = Dict{String, Vector{String}}()
+    for (dir_path, _, files) in walkdir(root_dir)
+        for fn in files
+            startswith(fn, "all_fronts_") && continue
+            m = match(r"^(.+?)_(\w+Sampler)_w\d+\.csv$", fn)
+            isnothing(m) && continue
+            canonical = joinpath(dir_path, "$(m.captures[1])_$(m.captures[2]).csv")
+            push!(get!(groups, canonical, String[]), joinpath(dir_path, fn))
+        end
+    end
 
-function normalized_igd(front::Vector{Vector{Float64}},
-                        reference_front::Vector{Vector{Float64}},
-                        ideal::Vector{Float64},
-                        nadir::Vector{Float64};
-                        use_plus::Bool=true)
-    (isempty(front) || isempty(reference_front)) && return Inf
+    for (canonical, shards) in groups
+        sort!(shards)
+        try
+            existing_rows = String[]
+            if isfile(canonical)
+                open(canonical, "r") do inp
+                    for (i, line) in enumerate(eachline(inp))
+                        i == 1 && continue
+                        push!(existing_rows, line)
+                    end
+                end
+            end
 
-    norm_obtained = [normalize_objectives(f, ideal, nadir) for f in front]
-    norm_reference = [normalize_objectives(f, ideal, nadir) for f in reference_front]
-
-    A = reduce(hcat, norm_obtained)'
-    B = reduce(hcat, norm_reference)'
-
-    if use_plus
-        return igd_plus(A, B)
-    else
-        return igd(A, B)
+            open(canonical, "w") do out
+                header_written = false
+                for shard in shards
+                    open(shard, "r") do inp
+                        for (i, line) in enumerate(eachline(inp))
+                            if i == 1
+                                header_written && continue
+                                header_written = true
+                            end
+                            println(out, line)
+                        end
+                    end
+                end
+                for row in existing_rows
+                    println(out, row)
+                end
+            end
+            for shard in shards
+                rm(shard)
+            end
+            println("  merged $(length(shards)) shards -> $canonical")
+        catch e
+            @warn "Failed to merge shards into $canonical: $e"
+        end
     end
 end
 
+# Algorithm types
 
 mutable struct Algorithm
     Name::Symbol
@@ -203,6 +301,7 @@ mutable struct ProblemData
     empirical_nadir::Union{Vector{Float64}, Nothing}
 end
 
+# Problem loaders
 
 function getproblem(id::Int)
     f, conf = HardTestProblems.get_RW_MOP_problem(id)
@@ -215,10 +314,7 @@ function getproblem(id::Int)
     return problem_name, f, bounds, nadir
 end
 
-
 # Algorithm setup
-
-const MOEAD_DE_INTERNAL_FIELDS = Set([:nobjectives, :N, :λ, :T, :n_r, :z, :B, :τ])
 
 function init_algorithm_structure(Name_algorithm::String)
     Algorithm_structure = Algorithm(:none, OrderedDict(), OrderedDict())
@@ -230,7 +326,6 @@ end
 
 function get_default_kwargs(algorithm)
     if algorithm == MOEAD_DE
-        # 2 is palced as a palceholder 
         weights = set_up_weights_MOEAD_DE(2)
         instance = algorithm(weights;)
         return OrderedDict(
@@ -277,11 +372,7 @@ function detect_searchspaces(searchspace::String)
     return Algorithm_structure
 end
 
-
-# Weight and algorithm setup
-
-const DEFAULT_MOEAD_NPARTITIONS = 50
-const MAX_MOEAD_POPULATION = 500  #subject to change 
+# MOEAD/DE weights
 
 function moead_weight_count(nobjectives::Int, npartitions::Int)
     return binomial(nobjectives + npartitions - 1, nobjectives - 1)
@@ -299,16 +390,13 @@ function set_up_weights_MOEAD_DE(nobjectives::Int, npartitions=nothing)
     if isnothing(npartitions)
         npartitions = DEFAULT_MOEAD_NPARTITIONS
     end
-
     expected_pop = moead_weight_count(nobjectives, npartitions)
-
     if expected_pop > MAX_MOEAD_POPULATION
         safe_npart = max_npartitions_for_cap(nobjectives, MAX_MOEAD_POPULATION)
         safe_pop   = moead_weight_count(nobjectives, safe_npart)
         @warn "npartitions=$npartitions gives $expected_pop vectors, capping to $safe_npart"
         npartitions = safe_npart
     end
-
     return gen_ref_dirs(nobjectives, npartitions)
 end
 
@@ -329,7 +417,8 @@ function set_up_algorithm(algorithm_instance, options_dict; params=Dict(), HPO=f
         if HPO
             T   = max(3, round(Int, 0.2  * length(MOEAD_WEIGHTS)))
             n_r = max(2, round(Int, 0.05 * length(MOEAD_WEIGHTS)))
-            metaheuristic = base_algo(MOEAD_WEIGHTS; params..., T, n_r, options=options)
+            algo_params = filter(kv -> kv.first != :npartitions, params)
+            metaheuristic = base_algo(MOEAD_WEIGHTS; algo_params..., T, n_r, options=options)
         else
             metaheuristic = base_algo(MOEAD_WEIGHTS; options=options)
         end
@@ -341,7 +430,6 @@ function set_up_algorithm(algorithm_instance, options_dict; params=Dict(), HPO=f
     return metaheuristic
 end
 
-
 function set_configuration_optuna(trial, Algorithm_structure, sampler_func, reference_point)
     params   = Dict()
     MOEAD_HP = Dict()
@@ -352,7 +440,6 @@ function set_configuration_optuna(trial, Algorithm_structure, sampler_func, refe
         lb, hb = range_vals[1:2]
 
         if hyperparam == :npartitions
-            # clamp to safety cap
             hb_safe = max_npartitions_for_cap(nobjectives, MAX_MOEAD_POPULATION)
             lb_clamped = min(max(2, lb), hb_safe)
             hb_clamped = min(hb, hb_safe)
@@ -367,7 +454,7 @@ function set_configuration_optuna(trial, Algorithm_structure, sampler_func, refe
             elseif param_type == Int64
                 trial.suggest_int(hyperparam, lb, hb)
             elseif param_type == Bool
-                trial.suggest_categorical(hyperparam, ["false", "true"])
+                parse(Bool, trial.suggest_categorical(hyperparam, ["false", "true"]))
             else
                 error("Unsupported parameter type: $param_type")
             end
@@ -376,11 +463,13 @@ function set_configuration_optuna(trial, Algorithm_structure, sampler_func, refe
 
     if !isempty(MOEAD_HP)
         weights = set_up_weights_MOEAD_DE(length(reference_point), MOEAD_HP[:npartitions])
+        merge!(params, MOEAD_HP)
     end
 
     return params, weights
 end
 
+# DataFrame access
 
 function get_df_column_values(df::DataFrame, column_name::String, array_position::Int, Alg_Name, run_dict)
     println("Reading $(Alg_Name) CSV — column: $(column_name)")
@@ -418,29 +507,16 @@ function get_df_column_values(df::DataFrame, column_name::String, array_position
     return run_dict
 end
 
-function get_df_column_values(df::DataFrame, column::Int, array_position::Int, Alg_Name, run_dict)
-    if !(1 ≤ column ≤ ncol(df))
-        error("Column $column out of range — CSV only has $(ncol(df)) columns")
-    end
-    column_name = names(df)[column]
-    return get_df_column_values(df, column_name, array_position, Alg_Name, run_dict)
-end
-
 function push_options(options_dataframe::DataFrame)
     return Dict(Symbol(col) => options_dataframe[1, col] for col in names(options_dataframe))
 end
 
 function unpack_df_vectors(problem_dataframe::DataFrame, problem_instance::Int)
-    problem_name_vector     = problem_dataframe[!, 1]
-    problem_function_vector = problem_dataframe[!, 2]
-    problem_bounds          = problem_dataframe[!, 3]
-    problem_ref_point       = problem_dataframe[!, 4]
-
     return (
-        problem_name_vector[problem_instance],
-        problem_function_vector[problem_instance],
-        problem_bounds[problem_instance],
-        problem_ref_point[problem_instance]
+        problem_dataframe[!, 1][problem_instance],
+        problem_dataframe[!, 2][problem_instance],
+        problem_dataframe[!, 3][problem_instance],
+        problem_dataframe[!, 4][problem_instance],
     )
 end
 
@@ -451,6 +527,7 @@ function unpack_df(problem_dataframe::DataFrame, algorithm_name::String, problem
     return problem_name, problem_function, problem_bounds, problem_ref_point, problem_algo_run
 end
 
+# Filesystem helpers
 
 function create_directories(metaheuristic_str::String, num_ite::Int64, problem_folder_name::String, path::String)
     iter_dir = joinpath(path, metaheuristic_str, string(num_ite))
@@ -465,6 +542,12 @@ function delete_file(file::String, path::String)
     end
 end
 
+function remove_existing_csv(filepath::String)
+    if ispath(filepath)
+        println("Removing $(filepath)")
+        rm(filepath, recursive=true)
+    end
+end
 
 # Benchmark loading
 
@@ -479,33 +562,28 @@ function benchmark_handler(All_Algorithm_structure, lower_bound::Int64, upper_bo
         problems_names       = String[],
         problem_function     = Function[],
         problem_bounds       = Any[],
-        problem_reference_point = Any[]
+        problem_reference_point = Any[],
     )
 
     for i in lower_bound:upper_bound
         probl_name, f, bounds, reference_point = getproblem(i)
-
         push!(problem_dataframe, (
             problems_names          = probl_name,
             problem_function        = f,
             problem_bounds          = bounds,
-            problem_reference_point = reference_point
+            problem_reference_point = reference_point,
         ))
     end
 
-    problem_dataframe = initialize_runs_dicts(All_Algorithm_structure, problem_dataframe, lower_bound, upper_bound;
-                                              baseline_name=baseline_name, baseline_dir=baseline_dir)
-    return problem_dataframe
+    return initialize_runs_dicts(All_Algorithm_structure, problem_dataframe, lower_bound, upper_bound;
+                                 baseline_name=baseline_name, baseline_dir=baseline_dir)
 end
-
-const RUNS_CI_COLUMN = "confidence_interval_95"
-const RUNS_CI_POSITION = 10  # ε=0.1 (the most lenient margin of error)
 
 function initialize_runs_dicts(All_Algorithm_structure, problem_dataframe::DataFrame, lower_bound::Int64, upper_bound::Int64;
                                baseline_name::String="", baseline_dir::String=".")
     for Algorithm_structure in All_Algorithm_structure
         fname = joinpath(baseline_dir, "minimum_runs_$(baseline_name)_$(Algorithm_structure.Name).csv")
-        
+
         if !isfile(fname)
             error("$fname not found")
         end
@@ -521,8 +599,7 @@ function initialize_runs_dicts(All_Algorithm_structure, problem_dataframe::DataF
     return problem_dataframe
 end
 
-
-const FALLBACK_RUNS = 30  # TODO: maybe make this configurable per-problem?
+# Optimization runner
 
 function run_optimization(problem_data::ProblemData, params,
                           Algorithm_structure, options;
@@ -535,7 +612,7 @@ function run_optimization(problem_data::ProblemData, params,
     all_fronts = collect_fronts ? Vector{Vector{Vector{Float64}}}() : nothing
 
     algorithm_instance = Algorithm_structure.Name
-    options = copy(options) 
+    options = copy(options)
     num_ite = options[:iterations]
 
     nobj = length(problem_data.reference_point)
@@ -544,11 +621,9 @@ function run_optimization(problem_data::ProblemData, params,
         MOEAD_WEIGHTS = set_up_weights_MOEAD_DE(nobj)
     end
 
-    if algorithm_instance == :MOEAD_DE
-        pop_size = length(MOEAD_WEIGHTS)
-    else
-        pop_size = get(params, :N, Algorithm_structure.Parameters[:N])
-    end
+    pop_size = algorithm_instance == :MOEAD_DE ?
+        length(MOEAD_WEIGHTS) :
+        get(params, :N, Algorithm_structure.Parameters[:N])
     max_evals = pop_size * num_ite
     options[:f_calls_limit] = 3 * max_evals
 
@@ -556,7 +631,7 @@ function run_optimization(problem_data::ProblemData, params,
     if num_runs isa String
         num_runs = tryparse(Int, num_runs)
         if isnothing(num_runs) || num_runs > 100
-            println("Problem $(problem_data.name): min_runs=$num_runs is too high or unparseable, using fallback=$FALLBACK_RUNS")
+            println("Problem $(problem_data.name): min_runs unparseable or >100, using fallback=$FALLBACK_RUNS")
             num_runs = FALLBACK_RUNS
         end
     elseif num_runs isa Number
@@ -572,10 +647,8 @@ function run_optimization(problem_data::ProblemData, params,
     has_bounds = !isnothing(empirical_ideal) && !isnothing(empirical_nadir)
 
     if has_bounds
-        
         for i in 1:num_runs
             println("Starting task... run $i / $num_runs for $(problem_data.name) with $algorithm_instance")
-
             options[:seed] = abs(hash((algorithm_instance, problem_data.name, i))) % 1_000_000
             metaheuristic = set_up_algorithm(algorithm_instance, options; params, HPO=true, MOEAD_WEIGHTS, nobjectives=nobj)
 
@@ -586,22 +659,20 @@ function run_optimization(problem_data::ProblemData, params,
 
             front = get_feasible_non_dominated(status.population)
             status = nothing
-
-            if !isempty(front)
-                hv = normalized_hypervolume(front, empirical_ideal, empirical_nadir)
-            else
-                hv = 0.0
+            metaheuristic = nothing
+            GC.gc()
+            @static if Sys.islinux()
+                ccall(:malloc_trim, Cint, (Cint,), 0)
             end
+
+            hv = isempty(front) ? 0.0 : normalized_hypervolume(front, empirical_ideal, empirical_nadir)
             push!(All_HV, hv)
             collect_fronts && push!(all_fronts, front)
         end
     else
-        
         all_run_fronts = Vector{Vector{Vector{Float64}}}()
-
         for i in 1:num_runs
             println("Starting task... run $i / $num_runs for $(problem_data.name) [DEAD] with $algorithm_instance")
-
             options[:seed] = abs(hash((algorithm_instance, problem_data.name, i))) % 1_000_000
             metaheuristic = set_up_algorithm(algorithm_instance, options; params, HPO=true, MOEAD_WEIGHTS, nobjectives=nobj)
 
@@ -610,10 +681,13 @@ function run_optimization(problem_data::ProblemData, params,
             end
             println("  Run $i/$num_runs done — $(length(status.population)) solutions, $(count(is_feasible, status.population)) feasible")
 
-            front = get_feasible_non_dominated(status.population)
+            push!(all_run_fronts, get_feasible_non_dominated(status.population))
             status = nothing
-
-            push!(all_run_fronts, front)
+            metaheuristic = nothing
+            GC.gc()
+            @static if Sys.islinux()
+                ccall(:malloc_trim, Cint, (Cint,), 0)
+            end
         end
 
         trial_ideal, _ = compute_empirical_bounds(all_run_fronts)
@@ -624,11 +698,7 @@ function run_optimization(problem_data::ProblemData, params,
         else
             println("  DEAD problem found feasible solutions! ideal=$trial_ideal, nadir(library)=$library_nadir")
             for front in all_run_fronts
-                if !isempty(front)
-                    hv = normalized_hypervolume(front, trial_ideal, library_nadir)
-                else
-                    hv = 0.0
-                end
+                hv = isempty(front) ? 0.0 : normalized_hypervolume(front, trial_ideal, library_nadir)
                 push!(All_HV, hv)
             end
         end
@@ -643,24 +713,25 @@ function run_optimization(problem_data::ProblemData, params,
     return mean_hv, All_HV, all_fronts
 end
 
+# Optuna driver
+
 function objective(trial, sampler_func, Algorithm_structure, problem_data::ProblemData, main_script_name, options;
                   fronts_csv_path::Union{String,Nothing}=nothing, sampler_name::String="", problem_instance::Int=0)
-    
-    params, weights = set_configuration_optuna(trial, Algorithm_structure, sampler_func, problem_data.reference_point)
 
-    println(params)
+    params, weights = set_configuration_optuna(trial, Algorithm_structure, sampler_func, problem_data.reference_point)
     println("  Trial $(trial.number): $(problem_data.name) | $(Algorithm_structure.Name) | params=$(params)")
 
     do_collect = !isnothing(fronts_csv_path)
 
-    mean_hv, All_HV, trial_fronts = run_optimization(problem_data, params,
-                                        Algorithm_structure,
-                                        options; MOEAD_WEIGHTS=weights,
-                                        empirical_ideal=problem_data.empirical_ideal,
-                                        empirical_nadir=problem_data.empirical_nadir,
-                                        collect_fronts=do_collect)
+    trial_elapsed = @elapsed begin
+        mean_hv, All_HV, trial_fronts = run_optimization(problem_data, params,
+                                            Algorithm_structure,
+                                            options; MOEAD_WEIGHTS=weights,
+                                            empirical_ideal=problem_data.empirical_ideal,
+                                            empirical_nadir=problem_data.empirical_nadir,
+                                            collect_fronts=do_collect)
+    end
 
-    # Save fronts to disk and free memory
     if do_collect && !isnothing(trial_fronts) && !isempty(trial_fronts)
         try
             save_trial_fronts(fronts_csv_path, trial_fronts,
@@ -672,20 +743,37 @@ function objective(trial, sampler_func, Algorithm_structure, problem_data::Probl
         trial_fronts = nothing
     end
 
+    params_json = JSON.json(Dict(string(k) => v for (k, v) in params))
+    all_hv_json = JSON.json(All_HV)
+    trial.set_user_attr("problem_name", problem_data.name)
+    trial.set_user_attr("params", params_json)
+    trial.set_user_attr("elapsed_seconds", trial_elapsed)
+
     if mean_hv <= 0.0 && isempty(All_HV)
+        GC.gc()
+        @static if Sys.islinux()
+            ccall(:malloc_trim, Cint, (Cint,), 0)
+        end
         return -Inf
     end
 
-    trial.set_user_attr("problem_name", problem_data.name)
-    trial.set_user_attr("All_HV", All_HV)
+    trial.set_user_attr("All_HV", all_hv_json)
+
+    GC.gc()
+    @static if Sys.islinux()
+        ccall(:malloc_trim, Cint, (Cint,), 0)
+    end
+    try
+        pyimport("gc").collect()
+    catch
+    end
 
     return mean_hv
 end
 
-
 function run_trial(sampler_instance::Int, Algorithm_structure, sampler_vector, results_path::String, options, problem_instance, problem_dataframe, main_script_name, n_trials, empirical_bounds_dict;
                    collect_fronts::Bool=false, storage_dir::Union{String, Nothing}=nothing)
-    
+
     problem_name, f, searchspace, reference_point, num_runs =
         unpack_df(problem_dataframe, String(Algorithm_structure.Name), problem_instance)
 
@@ -710,7 +798,7 @@ function run_trial(sampler_instance::Int, Algorithm_structure, sampler_vector, r
     study_kwargs = Dict(
         :study_name => "$(Algorithm_structure.Name)_$(sampler_name)_Problem_$(problem_instance)",
         :direction  => "maximize",
-        :sampler    => sampler_constructor
+        :sampler    => sampler_constructor,
     )
     if !isnothing(storage_dir)
         mkpath(storage_dir)
@@ -726,22 +814,33 @@ function run_trial(sampler_instance::Int, Algorithm_structure, sampler_vector, r
 
     num_ite = options[:iterations]
 
-    # Set up front collection path
     fronts_csv_path = nothing
     if collect_fronts
         problem_folder_name = "Problem_$(problem_instance)_$(problem_name)"
         problem_dir, _ = create_directories(String(Algorithm_structure.Name), num_ite, problem_folder_name, results_path)
         fronts_csv_path = joinpath(problem_dir, "all_fronts_$(Algorithm_structure.Name)_$(sampler_name)_Problem_$(problem_instance).csv")
-        # Remove stale file from previous run
-        isfile(fronts_csv_path) && rm(fronts_csv_path)
     end
 
-    study_elapsed = @elapsed study.optimize(
-        trial -> objective(trial, sampler_func, Algorithm_structure, problem_data, main_script_name, options;
-                           fronts_csv_path=fronts_csv_path, sampler_name=sampler_name, problem_instance=problem_instance),
-        n_trials = n_trials
-    )
-    println("  Study completed in $(round(study_elapsed, digits=1))s for $problem_name ($(Algorithm_structure.Name) / $sampler_name)")
+    trial_state_module = pyimport("optuna.trial")
+    countable_states = [trial_state_module.TrialState.COMPLETE,
+                        trial_state_module.TrialState.PRUNED]
+    completed_trial_count = length(study.get_trials(deepcopy=false, states=countable_states))
+    remaining_trials = max(0, n_trials - completed_trial_count)
+
+    if remaining_trials == 0
+        println("  Study already has $completed_trial_count completed/pruned trials (target=$n_trials), skipping optimize")
+        study_elapsed = 0.0
+    else
+        if completed_trial_count > 0
+            println("  Resuming study: $completed_trial_count already done, running $remaining_trials more (target=$n_trials)")
+        end
+        study_elapsed = @elapsed study.optimize(
+            trial -> objective(trial, sampler_func, Algorithm_structure, problem_data, main_script_name, options;
+                               fronts_csv_path=fronts_csv_path, sampler_name=sampler_name, problem_instance=problem_instance),
+            n_trials = remaining_trials,
+        )
+        println("  Study completed in $(round(study_elapsed, digits=1))s for $problem_name ($(Algorithm_structure.Name) / $sampler_name)")
+    end
 
     if isnan(study.best_value) || study.best_value == -Inf || !haskey(study.best_trial.user_attrs, "All_HV")
         println("No valid result for $problem_name")
@@ -751,12 +850,13 @@ function run_trial(sampler_instance::Int, Algorithm_structure, sampler_vector, r
         return nothing
     end
 
-    All_HV        = collect(Float64, study.best_trial.user_attrs["All_HV"])
+    all_hv_raw    = study.best_trial.user_attrs["All_HV"]
+    all_hv_parsed = all_hv_raw isa AbstractString ? JSON.parse(all_hv_raw) : all_hv_raw
+    All_HV        = collect(Float64, all_hv_parsed)
     sampler_class = study[:sampler][:__class__][:__name__]
     best_value    = Float64(study.best_value)
     best_params   = Dict(study.best_params)
 
-    # extract fANOVA importance before dropping the study
     param_importances = Dict{String, Float64}()
     try
         importance_module = pyimport("optuna.importance")
@@ -769,7 +869,6 @@ function run_trial(sampler_instance::Int, Algorithm_structure, sampler_vector, r
         @warn "Could not extract param importances for $problem_name: $e"
     end
 
-    # Extract convergence history
     trial_values = Float64[]
     for t in study.trials
         try
@@ -785,27 +884,31 @@ function run_trial(sampler_instance::Int, Algorithm_structure, sampler_vector, r
     GC.gc()
     pyimport("gc").collect()
 
-    # Fronts are now saved to disk during each trial (inside objective()),
-    # so no re-run is needed.
-
-    return (
-        algorithm_name   = Algorithm_structure.Name,
-        sampler          = sampler_class,
-        problem_name     = problem_name,
-        problem_instance = problem_instance,
-        hv_value         = best_value,
-        params           = best_params,
-        All_HV           = All_HV,
-        num_runs         = length(All_HV),
-        empirical_ideal  = emp_ideal,
-        empirical_nadir  = emp_nadir,
-        trial_values     = trial_values,
-        best_so_far      = best_so_far,
-        elapsed_seconds  = study_elapsed,
+    result = (
+        algorithm_name    = Algorithm_structure.Name,
+        sampler           = sampler_class,
+        problem_name      = problem_name,
+        problem_instance  = problem_instance,
+        hv_value          = best_value,
+        params            = best_params,
+        All_HV            = All_HV,
+        num_runs          = length(All_HV),
+        empirical_ideal   = emp_ideal,
+        empirical_nadir   = emp_nadir,
+        trial_values      = trial_values,
+        best_so_far       = best_so_far,
+        elapsed_seconds   = study_elapsed,
         param_importances = param_importances,
     )
-end
 
+    try
+        write_single_result(result, options, results_path)
+    catch e
+        @warn "Failed to write per-task summary for $problem_name ($sampler_name): $e"
+    end
+
+    return result
+end
 
 function init_parallel_arrays(sampler_vector, problem_instances::UnitRange{Int64})
     algo_instances = 1:length(sampler_vector)
@@ -824,9 +927,9 @@ function run_HPO(sampler_vector, options, results_path, All_Algorithm_structure,
         for alg in All_Algorithm_structure
         for (s, p) in zip(sampler_instances_array, problem_instances_array)
     ]
-    
 
-    log_path = joinpath(abspath(joinpath(@__DIR__, "../..")), "log_$main_script_name.txt")
+    log_path = joinpath(results_path, "log_$main_script_name.txt")
+    mkpath(dirname(log_path))
     if isfile(log_path)
         rm(log_path)
     end
@@ -838,9 +941,6 @@ function run_HPO(sampler_vector, options, results_path, All_Algorithm_structure,
         end
     end
 
-    
-    n_per_alg = length(sampler_instances_array)
-
     results_flat = pmap(all_tasks) do (Algorithm_structure, sampler_instance, prob)
         try
             println("Currently Testing : $(Algorithm_structure.Name) | problem=$prob")
@@ -851,70 +951,80 @@ function run_HPO(sampler_vector, options, results_path, All_Algorithm_structure,
             return result
         catch e
             @warn "Task failed for $(Algorithm_structure.Name), prob=$prob: $e"
-            nothing 
+            nothing
         end
     end
 
-    return [results_flat[(i-1)*n_per_alg + 1 : i*n_per_alg]
-            for i in 1:length(All_Algorithm_structure)]
+    if collect_fronts
+        println("Merging per-worker front shards...")
+        merge_worker_fronts(results_path)
+    end
+
+    println("Merging per-worker summary-CSV shards...")
+    merge_result_shards(results_path)
+
+    return results_flat
 end
 
+# Result writing
 
-function remove_existing_csv(filepath::String)
-    if ispath(filepath)
-        println("Removing $(filepath)")
-        rm(filepath, recursive=true)
+function write_single_result(r, options_dict, results_path)
+    isnothing(r) && return
+    iteration_counts = options_dict[:iterations]
+
+    println("$(r.algorithm_name) :: $(r.problem_name): value = $(r.hv_value), params = $(r.params)")
+
+    params_str = JSON.json(Dict(string(k) => v for (k, v) in r[:params]))
+
+    result_df = DataFrame(
+        algorithm_name    = [r[:algorithm_name]],
+        sampler           = [r[:sampler]],
+        problem_instance  = [r[:problem_instance]],
+        problem_name      = [r[:problem_name]],
+        hv_value          = [r[:hv_value]],
+        params            = [params_str],
+        num_runs          = [r[:num_runs]],
+        elapsed_seconds   = [round(r[:elapsed_seconds], digits=2)],
+        param_importances = [JSON.json(r[:param_importances])],
+        All_HV            = [JSON.json(r[:All_HV])],
+        empirical_ideal   = [isnothing(r[:empirical_ideal]) ? "nothing" : JSON.json(r[:empirical_ideal])],
+        empirical_nadir   = [isnothing(r[:empirical_nadir]) ? "nothing" : JSON.json(r[:empirical_nadir])],
+    )
+
+    problem_folder_name = "Problem_$(r[:problem_instance])_$(r.problem_name)"
+    _, iter_dir = create_directories(String(r[:algorithm_name]), iteration_counts, problem_folder_name, results_path)
+
+    canonical_name = "$(r[:algorithm_name])_$(r.sampler).csv"
+    canonical_path = joinpath(iter_dir, canonical_name)
+    shard_path     = _per_worker_path(canonical_path)
+
+    write_header = !isfile(shard_path)
+    CSV.write(shard_path, result_df; append=true, writeheader=write_header)
+
+    if hasproperty(r, :trial_values) && !isempty(r.trial_values)
+        conv_df = DataFrame(
+            problem_instance = fill(r[:problem_instance], length(r.trial_values)),
+            trial            = 1:length(r.trial_values),
+            hv_value         = r.trial_values,
+            best_so_far      = r.best_so_far,
+        )
+        conv_canonical_name = "convergence_$(r[:algorithm_name])_$(r.sampler).csv"
+        conv_canonical_path = joinpath(iter_dir, conv_canonical_name)
+        conv_shard_path     = _per_worker_path(conv_canonical_path)
+
+        conv_write_header = !isfile(conv_shard_path)
+        CSV.write(conv_shard_path, conv_df; append=true, writeheader=conv_write_header)
     end
 end
 
 function write_HPO_data_into_csv(results, options_dict, results_path)
-    for alg_results in results
-        for r in alg_results
-            if !isnothing(r)
-                iteration_counts = options_dict[:iterations]
-
-                println("$(r.algorithm_name) :: $(r.problem_name): value = $(r.hv_value), params = $(r.params)")
-
-                params_str = JSON.json(Dict(string(k) => v for (k, v) in r[:params]))
-
-                result_df = DataFrame(
-                    algorithm_name   = [r[:algorithm_name]],
-                    sampler          = [r[:sampler]],
-                    problem_instance = [r[:problem_instance]],
-                    problem_name     = [r[:problem_name]],
-                    hv_value         = [r[:hv_value]],
-                    params           = [params_str],
-                    num_runs         = [r[:num_runs]],
-                    elapsed_seconds  = [round(r[:elapsed_seconds], digits=2)],
-                    param_importances = [JSON.json(r[:param_importances])],
-                    All_HV           = [JSON.json(r[:All_HV])],
-                    empirical_ideal  = [isnothing(r[:empirical_ideal]) ? "nothing" : JSON.json(r[:empirical_ideal])],
-                    empirical_nadir  = [isnothing(r[:empirical_nadir]) ? "nothing" : JSON.json(r[:empirical_nadir])],
-                )
-
-                problem_folder_name = "Problem_$(r[:problem_instance])_$(r.problem_name)"
-                problem_dir, iter_dir = create_directories(String(r[:algorithm_name]), iteration_counts, problem_folder_name, results_path)
-
-                CSV_NAME = "$(r[:algorithm_name])_$(r.sampler).csv"
-                csv_path = joinpath(iter_dir, CSV_NAME)
-                
-                write_header = !isfile(csv_path)
-                CSV.write(csv_path, result_df, append=true, writeheader=write_header)
-
-              
-                if hasproperty(r, :trial_values) && !isempty(r.trial_values)
-                    conv_df = DataFrame(
-                        trial      = 1:length(r.trial_values),
-                        hv_value   = r.trial_values,
-                        best_so_far = r.best_so_far,
-                    )
-                    conv_name = "convergence_$(r[:algorithm_name])_$(r.sampler)_Problem_$(r[:problem_instance]).csv"
-                    conv_path = joinpath(iter_dir, conv_name)
-                    CSV.write(conv_path, conv_df)
-                end
-
-              
+    for item in results
+        if item isa AbstractArray
+            for r in item
+                write_single_result(r, options_dict, results_path)
             end
+        else
+            write_single_result(item, options_dict, results_path)
         end
     end
 end
